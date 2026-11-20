@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#10121f">
+    <meta name="description" content="跃迁王国：星辉闯关。原创像素动作肉鸽，跑过菌谷、工坊和云端堡垒。">
+    <title>跃迁王国：星辉闯关 | HopRealm</title>
+  </head>
+  <body>
+    <main class="cabinet">
+      <header class="mast">
+        <div class="brand"><span aria-hidden="true">✦</span> HOPREALM <small>STARLIGHT RUN</small></div>
+        <button id="sound" class="utility" type="button" aria-pressed="false"><span id="sound-label">音效开启</span> <kbd>M</kbd></button>
+      </header>
+      <section class="screen" id="screen" aria-label="星辉闯关游戏区">
+        <canvas id="game" width="960" height="540" aria-label="横版像素游戏画面"></canvas>
+        <div id="hud" class="hud"></div>
+        <div id="overlay" class="overlay" hidden></div>
+      </section>
+      <footer class="controls"><span><kbd>A</kbd> <kbd>D</kbd> 移动</span><span><kbd>Space</kbd> 跳跃</span><span><kbd>Shift</kbd> 疾跑</span><span><kbd>J</kbd> 技能</span><span><kbd>S</kbd> 下蹲 / 下砸</span><span><kbd>Esc</kbd> 构筑 / 暂停</span></footer>
+      <div id="touch" class="touch" hidden aria-label="触屏操作"></div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
