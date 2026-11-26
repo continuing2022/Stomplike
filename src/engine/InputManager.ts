@@ -15,16 +15,19 @@ export class InputManager {
 
   set(code: string, pressed: boolean) {
     if (pressed === this.keys.has(code)) return;
-    const wasJumping = this.held('jump');
+    const isJump = (KEYS.jump as readonly string[]).includes(code);
     if (pressed) {
       this.keys.add(code);
       for (const action of Object.keys(KEYS) as Action[]) {
         if ((KEYS[action] as readonly string[]).includes(code)) this.presses.add(action);
       }
-      if (!wasJumping && this.held('jump')) this.jumpBuffer = 0.12;
+      if (isJump) {
+        this.jumpBuffer = 0.12;
+        this.jumpReleased = false;
+      }
     } else {
       this.keys.delete(code);
-      if (wasJumping && !this.held('jump')) this.jumpReleased = true;
+      if (isJump && !this.held('jump')) this.jumpReleased = true;
     }
   }
 

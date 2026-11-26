@@ -60,7 +60,7 @@ class Game {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     this.audio.unlock();
     if (event.code === 'KeyM' && !event.repeat) { this.toggleSound(); return; }
-    if (event.target === this.sound && (event.code === 'Space' || event.code === 'Enter')) return;
+    if (event.target === this.sound && (event.code === 'Enter' || (event.code === 'Space' && this.screen !== 'play'))) return;
     if (event.code === 'Escape' && !event.repeat && ['starter', 'characters', 'talents', 'heat', 'confirm'].includes(this.screen)) {
       event.preventDefault();
       if (this.screen === 'confirm') this.talents();
