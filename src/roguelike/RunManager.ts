@@ -41,6 +41,7 @@ export class RunManager {
   kills = 0;
   maxCombo = 0;
   collected = 0;
+  coinTowardsLife = 0;
   stageStars = 0;
   rerolls: number;
   freeRefresh = false;

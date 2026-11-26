@@ -232,6 +232,7 @@ export class Overlays {
     details.append(this.line('span', 'wallet', '✦ ' + meta.stars + ' 星币'));
     details.append(this.line('span', 'chosen', meta.selected.name));
     if (meta.heat) details.append(this.line('span', 'chosen', '热度 ' + meta.heat));
+    if (meta.bestHeat > 0) details.append(this.line('span', 'chosen', '最高通关热度 ' + meta.bestHeat));
     this.show({
       style: 'title-view', title: '跃迁王国\n星辉闯关',
       intro: '跃过三座失落领地，夺回星辉核心。', details,

@@ -1,4 +1,4 @@
-export type Sound = 'jump' | 'stomp' | 'blockBump' | 'blockBreak' | 'coin' | 'powerup' | 'fireball' | 'shellKick' | 'hurt' | 'flagpole' | 'victory' | 'uiSelect';
+export type Sound = 'jump' | 'stomp' | 'blockBump' | 'blockBreak' | 'coin' | 'powerup' | 'fireball' | 'laser' | 'capsuleBreak' | 'weaponGet' | 'shellKick' | 'hurt' | 'flagpole' | 'victory' | 'uiSelect';
 export type Track = 'lobby' | 'valley' | 'mine' | 'sky' | 'boss' | 'quiet';
 
 const MELODIES: Record<Exclude<Track, 'quiet'>, number[]> = {
@@ -124,6 +124,14 @@ export class ChiptuneAudio {
       case 'coin': melody([83, 88], 0.054, 0.095); break;
       case 'powerup': melody([60, 65, 69, 72, 77, 81], 0.053); break;
       case 'fireball': sweep('square', 980, 170, 0.087, 0.08); break;
+      case 'laser': sweep('sawtooth', 1420, 360, 0.095, 0.085); break;
+      case 'capsuleBreak':
+        this.noise(now, 0.12, 0.2, 1250);
+        melody([74, 81, 86], 0.038, 0.08);
+        break;
+      case 'weaponGet':
+        melody([67, 72, 76, 79, 84, 88], 0.046, 0.11);
+        break;
       case 'shellKick':
         sweep('square', 440, 100, 0.105, 0.10);
         this.noise(now, 0.07, 0.12, 1450);

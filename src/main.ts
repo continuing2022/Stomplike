@@ -3,7 +3,9 @@ import { ChiptuneAudio } from './audio/ChiptuneAudio';
 import { GameEngine } from './engine/GameEngine';
 import { InputManager } from './engine/InputManager';
 import { PixelRenderer } from './graphics/PixelRenderer';
+import { BRICK, COINS, CRYSTAL, GROUND, HEROES, QUESTION, SOIL, STAR } from './graphics/SpriteData';
 import { drawShop, drawTitle } from './graphics/TitleScene';
+import { POD_PRELOAD_SPRITES } from './entities/SupplyPod';
 import { generateArena, generateLevel } from './level/LevelGenerator';
 import { Stage } from './level/Stage';
 import { CHARACTERS } from './roguelike/Characters';
@@ -33,6 +35,11 @@ class Game {
 
   constructor() {
     this.ctx.imageSmoothingEnabled = false;
+    this.renderer.preload([
+      ...COINS, ...QUESTION, ...GROUND, ...SOIL, ...BRICK, CRYSTAL, STAR,
+      ...HEROES.flatMap(hero => Object.values(hero)),
+      ...POD_PRELOAD_SPRITES,
+    ]);
     if (this.meta.muted) this.audio.toggle();
     this.updateSound();
     this.sound.onclick = () => this.toggleSound();
@@ -328,6 +335,12 @@ class Game {
       world: this.run.world, depth: this.run.depth, modifier: this.run.current.modifier, heat: this.run.heat,
       combo: inStage ? p.combo : 0, powered: inStage && p.powered,
       progress: inStage && !stage.boss ? p.center / stage.level.flag.x : undefined,
+      arsenal: inStage ? p.arsenal : undefined,
+      arsenalLevel: inStage ? p.arsenalLevel : 1,
+      arsenalTime: inStage ? p.arsenalTime : 0,
+      arsenalMax: inStage ? p.arsenalMax : 20,
+      rapidTime: inStage ? p.rapidTime : 0,
+      starTime: inStage ? p.star : 0,
     });
   }
 }

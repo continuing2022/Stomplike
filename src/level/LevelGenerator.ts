@@ -68,13 +68,32 @@ export function generateLevel(seed: number, world: World, depth: number, modifie
     const bottom = chunk.layout[14];
     for (let i = 0; i < bottom.length; i++) if (bottom[i] === '#') map.ground(start + i, 15, 1);
     if (world === 1) {
-      map.set(start + 2, 12, 'spring');
+      for (const offset of [2, 3, 1, 4]) {
+        const gx = start + offset;
+        if (!map.get(gx, 12) && map.get(gx, 13)?.kind === 'ground' && !enemies.some(e => Math.abs(e.x - gx * TILE) < TILE)) {
+          map.set(gx, 12, 'spring');
+          break;
+        }
+      }
       map.platform(start + 3, 9, random() < 0.5 ? 'x' : 'y', 30, random() * 6);
-      if (random() < 0.35 + depth * 0.12) spawn(random() < 0.5 ? 'wing' : 'miner', start + 4, 10, 1);
+      if (random() < 0.35 + depth * 0.12) {
+        const kind = random() < 0.5 ? 'wing' : 'miner';
+        const sx = start + 4;
+        if (kind === 'wing') spawn('wing', sx, 10, 1);
+        else if (map.get(sx, 13)?.kind === 'ground' && !map.get(sx, 12)) spawn('miner', sx, 12, 1);
+      }
     }
     if (world === 2) {
       for (let i = 0; i < 3; i++) if (!map.get(start + 4 + i, 8)) map.set(start + 4 + i, 8, 'cloud');
-      if (random() < 0.35 + depth * 0.12) spawn(random() < 0.5 ? 'mage' : 'guard', start + 13, 9);
+      if (random() < 0.35 + depth * 0.12) {
+        const kind = random() < 0.5 ? 'mage' : 'guard';
+        const width = chunk.layout[0].length;
+        const groundCol = kind === 'guard'
+          ? [13, 11, 15, 9, 16].find(c => c < width && map.get(start + c, 13)?.kind === 'ground' && !map.get(start + c, 12))
+          : undefined;
+        if (groundCol !== undefined) spawn('guard', start + groundCol, 12);
+        else spawn('mage', start + Math.min(13, width - 3), 9);
+      }
     }
     start += chunk.layout[0].length;
   }
@@ -94,10 +113,12 @@ export function generateArena(seed: number, world: World): Level {
     for (const x of [9, 18, 25]) map.set(x, 7, 'switch');
   } else if (world === 1) {
     for (const x of [6, 14, 22]) map.set(x, 10, 'switch');
+    for (const x of [4, 25]) map.set(x, 7, 'brick');
     for (const x of [3, 26]) map.set(x, 12, 'spring');
     map.platform(11, 8, 'x', 75);
   } else {
     [7, 8, 14, 15, 21, 22].forEach(x => map.set(x, 10, 'cloud'));
+    for (const x of [4, 25]) map.set(x, 8, 'brick');
     map.platform(11, 8, 'y', 24);
     map.platform(19, 7, 'x', 50);
   }

@@ -15,6 +15,7 @@ const cap = [
 const shellPalette = { d: '#293653', g: '#27867c', w: '#aaeb9e', s: '#3eae90', f: '#ffda8d' };
 const koopa = pixels('..........ddd... .........dfwdd.. .........dfffd.. ........ddfffdd. ...dddd.dffd.... ..dswwddffd..... .dsggggddfdd.... .dsgsggdffd..... dsggggggdffd.... ddddddddffdd.... ..ddffddffd..... ..ddddd.dddd....', shellPalette);
 const shell = pixels('.....dddddd..... ...ddgwwgggdd... ..dswwssgggggd.. .dsgggsggsggggd. dsggggsggggggggd dddddddddddddddd .dffddffddffddf. ..dddddddddddd..', shellPalette);
+const iceShell = pixels('.....dddddd..... ...ddgwwgggdd... ..dswwssgggggd.. .dsgggsggsggggd. dsggggsggggggggd dddddddddddddddd .dffddffddffddf. ..dddddddddddd..', { d: '#25416b', g: '#6ec6f5', w: '#ebffff', s: '#9be4ff', f: '#c9f2ff' });
 const plant = pixels('...dddd...dddd.. ..dgrggd.drgggd. .dggrgggddggrggd .dgggggggggggggd .ddddddddddddddd ..dwwddddwwddd.. .....dggd....... ...ddgggddd..... ..dggggggggd.... ...ddddddgd..... ......dggd...... ......dggd......', { d: '#243851', r: '#ffdd80', g: '#e4587d', w: '#fff6cf' });
 const wing = pixels('....w......w.... ...www....www... ..gwwww..wwwwg.. ...ggwwddwwgg... .....ddggdd..... ....dsggggsd.... ...dsgwgwgsd.... ...dgwgwggsd.... ....dggggsd..... ....dddddd...... .....d..d.......', { d: '#30284d', g: '#5f75bc', w: '#f0dbff', s: '#a691ef' });
 const miner = pixels('.....dddddd..... ....dwwwwwwd.... ...dssssssssd... ..dddddddddddd.. ....dgwwgwd..... ....dgggggd..... ..ddggggggdd.... ..dbbbbbsbdd.... .ddgbbbsbbd.dd.. ..dgbbbsbddd.... ...ddddddd...... ..ddd..ddd......', { d: '#22233f', w: '#fff0ad', s: '#efae5b', g: '#f4a48a', b: '#5fa5c6' });
@@ -41,6 +42,8 @@ export class Enemy implements Body {
   flaming = false;
   homing = false;
   wingLost = false;
+  frozenShell = false;
+  orbitCooldown = 0;
   nextShot = 0.8;
   armor = 0;
   private homeX: number;
@@ -60,7 +63,9 @@ export class Enemy implements Body {
 
   squash() { this.state = 'squashed'; this.stateTime = 0.4; this.vx = 0; }
 
-  hideInShell() {
+  hideInShell(frozen = false) {
+    if (this.kind === 'plant' || this.kind === 'cannonball') return;
+    this.frozenShell = frozen;
     this.state = 'shell';
     this.stateTime = 0.19;
     this.y += this.h - 17;
@@ -81,10 +86,11 @@ export class Enemy implements Body {
 
   tick(dt: number, map: TileMap, heroX: number, speed: number, emit: (shot: EnemyShot) => void) {
     if (this.state === 'gone') return;
-    this.age += dt;
+    this.age += dt * (this.kind === 'plant' && this.chilled > 0 ? 0.35 : 1);
     this.stateTime = Math.max(0, this.stateTime - dt);
     this.stunned = Math.max(0, this.stunned - dt);
     this.chilled = Math.max(0, this.chilled - dt);
+    this.orbitCooldown = Math.max(0, this.orbitCooldown - dt);
     if (this.state === 'squashed') {
       if (!this.stateTime) this.state = 'gone';
       return;
@@ -101,7 +107,10 @@ export class Enemy implements Body {
       return;
     }
     if (this.state === 'active' && !this.stunned) this.act(dt, heroX, speed, emit);
-    if (this.state === 'active' && ((this.kind === 'wing' && !this.wingLost) || this.kind === 'mage')) return;
+    if (this.state === 'active' && ((this.kind === 'wing' && !this.wingLost) || this.kind === 'mage')) {
+      if (this.kind === 'mage' && this.stunned > 0) this.y = this.homeY - 20 + Math.sin(this.age * 24) * 3;
+      return;
+    }
     if (this.state === 'shell' || this.stunned > 0 && this.state === 'active') this.vx = 0;
     this.vy = Math.min(730, this.vy + 1160 * dt);
     const velocity = this.vx;
@@ -133,13 +142,15 @@ export class Enemy implements Body {
       return;
     }
     if (this.kind === 'miner' || this.kind === 'mage') {
-      this.nextShot -= dt;
+      this.nextShot -= dt * slowdown;
+      if (this.kind === 'mage') this.y = this.homeY - 20 - Math.sin(this.age * 3.5 * slowdown) * 20;
       if (this.nextShot <= 0 && Math.abs(heroX - this.x) < 470) {
-        const face = Math.sign(heroX - this.x) || 1;
         if (this.kind === 'mage') {
-          this.x = this.homeX + (Math.sin(this.age * 41) > 0 ? 65 : -65);
-          this.y = this.homeY - 20 - Math.sin(this.age * 5) * 24;
+          const offset = this.x >= this.homeX ? -56 : 56;
+          this.x = this.homeX + offset;
         }
+        const face = Math.sign(heroX - this.x) || 1;
+        this.face = face;
         emit({ x: this.center, y: this.y + 7, vx: face * (this.kind === 'mage' ? 190 : 178), vy: this.kind === 'mage' ? 72 : -310, type: this.kind === 'mage' ? 'magic' : 'wrench' });
         this.nextShot = this.kind === 'mage' ? 2.15 : 2.85;
       }
@@ -149,11 +160,11 @@ export class Enemy implements Body {
 
   draw(ctx: CanvasRenderingContext2D, renderer: PixelRenderer, time: number) {
     if (this.state === 'gone' || !this.visible) return;
-    const sprite = this.state === 'shell' || this.state === 'rolling' ? shell : {
+    const sprite = this.state === 'shell' || this.state === 'rolling' ? (this.frozenShell ? iceShell : shell) : {
       walker: cap[Math.floor(time * 8) % 2], koopa, plant, wing: this.wingLost ? cap[1] : wing, miner, mage, guard, cannonball: cannon,
     }[this.kind];
     ctx.save();
-    if (this.kind === 'plant') {
+    if (this.kind === 'plant' && this.state === 'active') {
       ctx.beginPath();
       ctx.rect(this.homeX - 14, this.homeY - 10, 55, 42);
       ctx.clip();

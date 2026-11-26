@@ -7,6 +7,7 @@ import { Boss, type BossEvents } from '../entities/Boss';
 import { Enemy, type EnemyShot } from '../entities/Enemy';
 import { Player, type PlayerEvents } from '../entities/Player';
 import { Projectile } from '../entities/Projectile';
+import { EMBLEM_META, pickEmblem, SupplyPod, WingedEmblem } from '../entities/SupplyPod';
 import { drawBackground } from '../graphics/Background';
 import { ParticleSystem } from '../graphics/ParticleSystem';
 import type { PixelRenderer } from '../graphics/PixelRenderer';
@@ -29,6 +30,8 @@ export class Stage {
   private redFlash = 0;
   readonly camera = new Camera();
   readonly pickups: Pickup[] = [];
+  readonly pods: SupplyPod[] = [];
+  readonly emblems: WingedEmblem[] = [];
   readonly player: Player;
   readonly boss?: Boss;
   private readonly bossEvents: BossEvents;
@@ -42,9 +45,14 @@ export class Stage {
   private talismans = 0;
   private coinChain = 0;
   private lastCoin = -Infinity;
-  private nextLife = 100;
   private skillDelay = 0;
+  private brickDelay = 0;
+  private heavyBoost = 0;
+  private shotToggle = 0;
   private nextShell = 6;
+  private podMilestones: number[];
+  private nextArenaPod = 5.5;
+  private lastBossPhase = 1;
   readonly map: TileMap;
   readonly world: number;
   readonly modifier: Modifier;
@@ -68,6 +76,7 @@ export class Stage {
     this.map = level.map;
     this.world = level.world;
     this.modifier = level.modifier;
+    this.podMilestones = level.arena ? [] : run.current.kind === 'elite' ? [0.14, 0.39, 0.64, 0.84] : [0.16, 0.48, 0.76];
     const character = run.character;
     this.player = new Player(84, 13 * TILE - 30, character.skin);
     this.player.doubleJump = character.doubleJump;
@@ -119,6 +128,91 @@ export class Stage {
 
   private has(effect: Effect) { return this.effects.has(effect); }
 
+  private triggerBlockSynergy(x: number, y: number) {
+    if (this.tags.block >= 2) {
+      for (let i = 0; i < 4; i++) this.projectiles.push(new Projectile('shard', x, y - 20, (i - 1.5) * 120, -195 - i % 2 * 65, 1.15));
+    }
+    if (this.has('charge') && ++this.charges % 5 === 0) {
+      this.player.star = Math.max(this.player.star, 3);
+      this.feedback.audio.play('powerup');
+      this.particles.text(x, y - 24, 'STAR!');
+    }
+  }
+
+  private spawnPod(arena = false) {
+    const cycling = this.random() < (arena ? 0.42 : this.run.current.kind === 'elite' ? 0.48 : 0.34);
+    const kind = pickEmblem(this.random, this.player.arsenal);
+    if (arena) {
+      const fromLeft = this.player.center > WIDTH * 0.5;
+      const spawnX = fromLeft ? 44 : WIDTH - 80;
+      const baseY = this.world === 2 ? 236 : 252;
+      this.pods.push(new SupplyPod(spawnX, baseY, fromLeft ? 1 : -1, kind, cycling, this.random() * Math.PI * 2));
+      return;
+    }
+    const maxSpawnX = Math.max(180, this.level.flag.x - 110);
+    const spawnX = clamp(this.camera.x + WIDTH - 14, 160, maxSpawnX);
+    const sampleCol = clamp(Math.floor((spawnX - 140) / TILE), 0, this.map.columns - 1);
+    let groundY = 13 * TILE;
+    for (let row = 6; row <= 13; row++) {
+      const tile = this.map.get(sampleCol, row);
+      if (tile && tile.kind === 'ground') { groundY = row * TILE; break; }
+    }
+    const baseY = clamp(groundY - 134, 168, 286);
+    this.pods.push(new SupplyPod(spawnX, baseY, -1, kind, cycling, this.random() * Math.PI * 2));
+  }
+
+  private breakPod(pod: SupplyPod) {
+    if (!pod.alive) return;
+    pod.alive = false;
+    const meta = EMBLEM_META[pod.kind];
+    const cx = pod.center;
+    const cy = pod.y + pod.h * 0.5;
+    this.feedback.audio.play('capsuleBreak');
+    this.feedback.freeze(0.025);
+    this.camera.shake(3);
+    this.particles.burst(cx, cy, 18, [meta.color, '#fff4b8', '#9fb3d9'], 135, 65, true);
+    this.particles.debris(cx, cy, ['#eef4ff', '#6c7ba8']);
+    this.triggerBlockSynergy(cx, cy);
+    if (this.run.character.id === 'leo') this.sprayCoins(cx, cy - 6, 2, 1);
+    const drift = clamp((this.player.center - cx) * 0.22, -48, 48);
+    this.emblems.push(new WingedEmblem(cx - 13, pod.y, pod.kind, this.map, drift));
+  }
+
+  private applyEmblem(emblem: WingedEmblem) {
+    const p = this.player;
+    const meta = EMBLEM_META[emblem.kind];
+    this.feedback.audio.play('weaponGet');
+    this.particles.burst(emblem.center, emblem.y + 10, 22, [meta.color, meta.core, '#ffffff'], 135, 45, true);
+    if (emblem.kind === 'B') {
+      const overcharge = p.shield > 0 || p.star > 0;
+      p.star = Math.max(p.star, 8);
+      p.shield = Math.min(6, p.shield + 1);
+      if (overcharge) {
+        for (const shot of this.projectiles) if (shot.hostile) shot.life = 0;
+        this.shock(p.center, p.y + 12, this.damage(1.2));
+      }
+      this.particles.text(p.center, p.y - 14, overcharge ? 'MAX BARRIER!' : meta.callout, meta.color);
+      return;
+    }
+    if (emblem.kind === 'R') {
+      p.rapidTime = 15;
+      if (p.arsenal && p.arsenalTime > 0) {
+        p.arsenalLevel = 2;
+        p.arsenalTime = p.arsenalMax;
+        this.particles.text(p.center, p.y - 14, p.arsenal + ' OVERDRIVE!', meta.color);
+      } else {
+        this.particles.text(p.center, p.y - 14, meta.callout, meta.color);
+      }
+      return;
+    }
+    const upgrade = (p.arsenal === emblem.kind && p.arsenalTime > 0) || p.rapidTime > 0;
+    p.arsenal = emblem.kind;
+    p.arsenalLevel = upgrade ? 2 : 1;
+    p.arsenalMax = 20;
+    p.arsenalTime = 20;
+    this.particles.text(p.center, p.y - 14, upgrade ? emblem.kind + ' MAX!' : meta.callout, meta.color);
+  }
+
   private hitBlock(tile: Tile, force = false) {
     if (tile.kind === 'switch' && tile.bump <= 0 && this.boss) {
       tile.bump = 0.2;
@@ -152,12 +246,7 @@ export class Stage {
         else this.fire('fire', x, y - 22, this.player.face);
       }
     }
-    if (this.tags.block >= 2) for (let i = 0; i < 4; i++) this.projectiles.push(new Projectile('shard', x, y - 28, (i - 1.5) * 120, -195 - i % 2 * 65, 1.15));
-    if (this.has('charge') && ++this.charges % 5 === 0) {
-      this.player.star = 3;
-      this.feedback.audio.play('powerup');
-      this.particles.text(x, y - 24, 'STAR!');
-    }
+    this.triggerBlockSynergy(x, y - 8);
     if (!broken) { this.feedback.audio.play('blockBump'); return; }
     this.map.remove(tile);
     if (steel && kind === 'brick') this.sprayCoins(x, y - 8, 2, 1);
@@ -172,7 +261,7 @@ export class Stage {
       this.particles.burst(x, y, 22, ['#ff9b7c', '#ffd082', '#ed6387'], 144);
       for (const enemy of this.enemies) if (enemy.alive && Math.hypot(enemy.center - x, enemy.y - y) < radius) this.defeat(enemy);
       if (!force && this.has('blast')) {
-        const adjacent = this.map.candidates({ x: tile.x - TILE, y: tile.y - 1, w: TILE * 3, h: 2 });
+        const adjacent = this.map.candidates({ x: tile.x - TILE + 2, y: tile.y - TILE + 2, w: TILE * 3 - 4, h: TILE * 3 - 4 });
         for (const other of adjacent) if (other !== tile && other.kind === 'brick') this.hitBlock(other, true);
       }
     }
@@ -194,8 +283,9 @@ export class Stage {
     value *= this.modifier === 'double-coins' ? 2 : 1;
     this.coins += value;
     this.balance += value;
-    if (this.coins >= this.nextLife) {
-      this.nextLife += 100;
+    this.run.coinTowardsLife += value;
+    while (this.run.coinTowardsLife >= 100) {
+      this.run.coinTowardsLife -= 100;
       if (this.player.hearts < this.player.maxHearts) this.player.hearts++;
       else this.player.shield++;
       this.feedback.audio.play('powerup');
@@ -222,7 +312,14 @@ export class Stage {
 
   private damage(base: number, expensive = false) {
     let value = base * (1 + (this.run.character.id === 'buck' ? Math.floor(this.balance / 50) * 0.1 : 0)) * (this.has('crown') ? 1 + Math.floor(this.balance / 100) * 0.25 : 1);
-    if (expensive && this.has('heavy') && this.balance >= 3) { this.balance -= 3; value *= 1.6; }
+    if (expensive && this.has('heavy')) {
+      if (this.heavyBoost > 0) value *= 1.6;
+      else if (this.balance >= 3) {
+        this.balance -= 3;
+        this.heavyBoost = 0.55;
+        value *= 1.6;
+      }
+    }
     return value;
   }
 
@@ -230,6 +327,12 @@ export class Stage {
     enemy.hp -= value;
     if (enemy.hp <= 0.0001) this.defeat(enemy);
     else { enemy.stunned = 0.32; this.particles.text(enemy.center, enemy.y, '−' + Number(value.toFixed(1))); }
+  }
+
+  private currentElement(): Projectile['element'] {
+    const fire = this.has('fire');
+    const ice = this.has('ice');
+    return fire && ice ? 'both' : fire ? 'fire' : ice ? 'ice' : undefined;
   }
 
   private fire(type: 'fire' | 'ice', x: number, y: number, face: number, vy = -95, power = 1) {
@@ -249,20 +352,110 @@ export class Stage {
   }
 
   private skill() {
-    if (this.skillDelay > 0) return;
     const p = this.player;
-    const canShoot = this.has('fire') || this.has('ice') || this.tags.projectile >= 2;
-    const summons = this.has('portable') && this.input.pressed('skill') && this.temporaryBrick(!p.grounded && p.vy >= 0);
-    if (!canShoot && !summons) return;
-    if (canShoot) {
-      const x = p.center + p.face * 16 - 7;
-      const kind = this.has('ice') ? 'ice' : 'fire';
-      const power = this.damage(1.25, true);
-      this.fire(this.has('fire') ? 'fire' : kind, x, p.y + 9, p.face, -108, power);
-      if (this.has('twin')) this.fire(kind, x, p.y + 2, p.face, -235, power);
+    if (this.has('portable') && this.input.pressed('skill') && this.brickDelay <= 0) {
+      if (this.temporaryBrick(!p.grounded && p.vy >= 0)) {
+        this.brickDelay = 0.75;
+        this.feedback.audio.play('blockBump');
+      }
+    }
+    if (this.skillDelay > 0) return;
+    const arsenal = p.arsenalTime > 0 ? p.arsenal : undefined;
+    const canShootBase = this.has('fire') || this.has('ice') || this.tags.projectile >= 2;
+    const rapidFallback = !arsenal && !canShootBase && p.rapidTime > 0;
+    if (!arsenal && !canShootBase && !rapidFallback) return;
+
+    const bounces = this.tags.projectile >= 4 ? 2 : 0;
+    const element = this.currentElement();
+    const rapidMul = p.rapidTime > 0 ? 1.3 : 1;
+    const twin = this.has('twin');
+    const lv2 = p.arsenalLevel === 2;
+    const muzzleX = p.center + p.face * 16 - 7;
+    const muzzleY = p.y + (p.crouch ? 14 : 9);
+    let baseDelay = 0.45;
+
+    if (arsenal === 'S') {
+      const angles = lv2
+        ? [-0.42, -0.21, 0, 0.21, 0.42]
+        : twin ? [-0.33, -0.11, 0.11, 0.33] : [-0.26, 0, 0.26];
+      const power = this.damage((lv2 ? 1.05 : 0.92) * rapidMul, true);
+      for (const a of angles) {
+        const shot = new Projectile('spread', muzzleX, muzzleY, p.face * Math.cos(a) * 460, Math.sin(a) * 460, power, false, bounces);
+        shot.element = element;
+        if (lv2) { shot.w = 17; shot.h = 17; }
+        shot.onWall = body => this.particles.burst(body.x, body.y, 5, ['#ff8f8f', '#ffe29a']);
+        this.projectiles.push(shot);
+      }
       this.feedback.audio.play('fireball');
-    } else this.feedback.audio.play('blockBump');
-    this.skillDelay = (canShoot ? 0.45 : 0.75) / (p.coinBoost > 0 ? 1.15 : 1);
+      baseDelay = 0.34;
+    } else if (arsenal === 'L') {
+      const bw = lv2 ? 56 : 40;
+      const bh = lv2 ? 13 : 9;
+      const bx = p.face > 0 ? p.center + 10 : p.center - 10 - bw;
+      const power = this.damage((lv2 ? 2.2 : 1.6) * rapidMul, true);
+      const beam = new Projectile('laser', bx, muzzleY, p.face * 650, 0, power);
+      beam.w = bw;
+      beam.h = bh;
+      beam.element = element;
+      this.projectiles.push(beam);
+      if (twin) {
+        const sub = new Projectile('laser', bx, muzzleY - 11, p.face * 650, 0, power * 0.65);
+        sub.w = Math.round(bw * 0.8);
+        sub.h = Math.max(6, bh - 3);
+        sub.element = element;
+        this.projectiles.push(sub);
+      }
+      this.feedback.audio.play('laser');
+      baseDelay = 0.38;
+    } else if (arsenal === 'M') {
+      const count = (lv2 ? 3 : 2) + (twin ? 1 : 0);
+      const enemies = this.nearby(p.center, p.y, 640);
+      const targets: Body[] = this.boss && this.boss.vulnerable ? [this.boss, ...enemies] : enemies;
+      const power = this.damage((lv2 ? 1.15 : 0.98) * rapidMul, true);
+      for (let i = 0; i < count; i++) {
+        const vy = (i - (count - 1) / 2) * 115 - 30;
+        const missile = new Projectile('missile', muzzleX, muzzleY, p.face * 340, vy, power, false, bounces);
+        missile.element = element;
+        missile.splash = lv2 ? 52 : 0;
+        if (targets.length) missile.target = targets[i % targets.length];
+        missile.onWall = body => this.particles.burst(body.x, body.y, 5, ['#d8a4ff', '#ffffff']);
+        this.projectiles.push(missile);
+      }
+      this.feedback.audio.play('fireball');
+      baseDelay = 0.40;
+    } else if (arsenal === 'F') {
+      const power = this.damage((lv2 ? 1.85 : 1.4) * rapidMul, true);
+      const wheel = new Projectile('flame', muzzleX, muzzleY - 3, p.face * 340, 0, power);
+      wheel.element = element ?? 'fire';
+      wheel.splash = lv2 ? 48 : 0;
+      if (lv2) { wheel.w = 26; wheel.h = 26; }
+      this.projectiles.push(wheel);
+      if (twin) {
+        const second = new Projectile('flame', muzzleX, muzzleY - 16, p.face * 320, 0, power * 0.75);
+        second.element = element ?? 'fire';
+        this.projectiles.push(second);
+      }
+      this.feedback.audio.play('fireball');
+      baseDelay = 0.42;
+    } else if (rapidFallback) {
+      const power = this.damage(1.05, true);
+      const shot = new Projectile('spread', muzzleX, muzzleY, p.face * 485, 0, power, false, bounces);
+      shot.onWall = body => this.particles.burst(body.x, body.y, 4, GOLD);
+      this.projectiles.push(shot);
+      this.feedback.audio.play('fireball');
+      baseDelay = 0.36;
+    } else {
+      const both = this.has('fire') && this.has('ice');
+      const primary: 'fire' | 'ice' = both ? (twin ? 'fire' : (this.shotToggle++ % 2 ? 'ice' : 'fire')) : (this.has('ice') ? 'ice' : 'fire');
+      const power = this.damage(1.25 * rapidMul, true);
+      this.fire(primary, muzzleX, muzzleY, p.face, -108, power);
+      if (twin) this.fire(both ? 'ice' : primary, muzzleX, muzzleY - 7, p.face, -235, power);
+      this.feedback.audio.play('fireball');
+      baseDelay = 0.45;
+    }
+
+    const haste = (p.rapidTime > 0 ? 1.45 : 1) * (p.coinBoost > 0 ? 1.15 : 1);
+    this.skillDelay = baseDelay / haste;
   }
 
   private shock(x: number, y: number, power: number) {
@@ -337,6 +530,7 @@ export class Stage {
     if (!fall && p.shield) p.shield--;
     else if (!fall && p.powered) p.setPower(false, this.map);
     else p.hearts--;
+    if (p.arsenalTime > 0) p.arsenalTime = Math.max(2, p.arsenalTime - 4);
     p.invulnerable = 1.5;
     p.hurtTime = 0.26;
     p.combo = 0;
@@ -373,6 +567,98 @@ export class Stage {
     this.projectiles.push(new Projectile(shot.type, shot.x, shot.y, shot.vx, shot.vy, 1, true));
   }
 
+  private splashDamage(cx: number, cy: number, radius: number, power: number, exclude?: Enemy) {
+    this.particles.burst(cx, cy, 14, ['#ff9f68', '#ffe66d', '#e5b3ff'], 125, 55, true);
+    for (const other of this.nearby(cx, cy, radius)) {
+      if (other !== exclude) this.hitEnemy(other, power);
+    }
+  }
+
+  private orbitTick() {
+    const orbs = this.player.orbitPositions();
+    if (!orbs.length) return;
+    for (const orb of orbs) {
+      const box = { x: orb.x - 9, y: orb.y - 9, w: 18, h: 18 };
+      for (const shot of this.projectiles) {
+        if (shot.hostile && shot.life > 0 && shot.type !== 'rock' && overlaps(box, shot)) {
+          shot.life = 0;
+          this.particles.burst(shot.x, shot.y, 6, ['#ff924c', '#fff3b0']);
+        }
+      }
+      for (const e of this.enemies) {
+        if (!e.alive || !e.visible || e.orbitCooldown > 0 || !overlaps(box, e)) continue;
+        e.orbitCooldown = 0.42;
+        e.burn = 1.6;
+        e.burnTick = 0.4;
+        this.particles.burst(orb.x, orb.y, 6, ['#ff924c', '#fff3b0']);
+        this.hitEnemy(e, this.damage(0.65));
+      }
+      if (this.boss && this.boss.vulnerable && this.boss.cooldown <= 0 && overlaps(box, this.boss)) {
+        this.hitBoss(this.damage(0.55), orb.x, orb.y);
+      }
+    }
+  }
+
+  private podTick(dt: number) {
+    const p = this.player;
+    if (!this.level.arena) {
+      const progress = p.center / this.level.flag.x;
+      if (this.podMilestones.length && progress >= this.podMilestones[0]) {
+        this.podMilestones.shift();
+        this.spawnPod(false);
+      }
+    } else if (this.boss && !this.boss.dead) {
+      if (this.time >= this.nextArenaPod && this.pods.length < 2) {
+        this.nextArenaPod = this.time + 14;
+        this.spawnPod(true);
+      }
+      if (this.boss.phase > this.lastBossPhase) {
+        this.lastBossPhase = this.boss.phase;
+        this.spawnPod(true);
+      }
+    }
+
+    for (const pod of this.pods) {
+      pod.tick(dt, this.camera.x, Boolean(this.level.arena));
+      if (!pod.alive) continue;
+      if (Math.floor(pod.age * 60) % 5 === 0) {
+        const tailX = pod.vx < 0 ? pod.x + pod.w : pod.x;
+        this.particles.burst(tailX, pod.y + pod.h * 0.5, 1, [EMBLEM_META[pod.kind].color, '#fff3b0'], 32, 0);
+      }
+      for (const shell of this.enemies) {
+        if (shell.state === 'rolling' && overlaps(shell, pod)) {
+          this.breakPod(pod);
+          break;
+        }
+      }
+      if (!pod.alive || p.recover > 0 || p.hearts <= 0) continue;
+      if (stomped(p, p.previousFeet, pod, p.falling)) {
+        p.combo++;
+        this.bestCombo = Math.max(this.bestCombo, p.combo);
+        p.y = Math.min(p.y, pod.y - p.h);
+        p.bounce(this.input.held('jump'), this.tags.stomp >= 2 ? 1.15 : 1);
+        this.stompEffects(pod.center, pod.y);
+        this.feedback.audio.play('stomp', p.combo);
+        if (p.combo > 1) this.particles.text(p.center, p.y - 7, 'x' + p.combo + '!');
+        this.breakPod(pod);
+      } else if (overlaps(p, pod) && (p.vy < 0 || p.star > 0 || p.pounding)) {
+        if (p.vy < 0 && !p.star) p.vy = Math.max(p.vy, -60);
+        this.breakPod(pod);
+      }
+    }
+    for (let i = this.pods.length - 1; i >= 0; i--) if (!this.pods[i].alive) this.pods.splice(i, 1);
+
+    const magnet = Math.max(88, this.run.character.magnet * 1.6, this.tags.greed >= 2 ? 120 : 0);
+    for (const emblem of this.emblems) {
+      emblem.tick(dt, this.map, p.center, p.y + p.h * 0.5, p.recover > 0 ? 0 : magnet);
+      if (emblem.life > 0 && emblem.ready && !p.recover && overlaps(emblem, p)) {
+        emblem.life = 0;
+        this.applyEmblem(emblem);
+      }
+    }
+    for (let i = this.emblems.length - 1; i >= 0; i--) if (this.emblems[i].life <= 0) this.emblems.splice(i, 1);
+  }
+
   private projectileTick(dt: number) {
     const p = this.player;
     for (const shot of this.projectiles) {
@@ -388,33 +674,52 @@ export class Stage {
         if (!p.recover && overlaps(shot, p)) { this.hurt(Math.sign(p.center - shot.x)); shot.life = 0; }
         continue;
       }
+      for (const pod of this.pods) {
+        if (pod.alive && overlaps(shot, pod)) {
+          this.breakPod(pod);
+          if (!shot.pierce) { shot.life = 0; break; }
+        }
+      }
+      if (shot.life <= 0) continue;
+
       if (this.boss && this.boss.vulnerable && !shot.hit.has(this.boss) && overlaps(shot, this.boss)) {
         if (this.hitBoss(shot.damage * 0.75, shot.x, shot.y)) {
           shot.hit.add(this.boss);
-          if (shot.type !== 'wave') { shot.life = 0; continue; }
+          if (shot.splash > 0) this.splashDamage(shot.x, shot.y, shot.splash, shot.damage * 0.45);
+          if (!shot.pierce) { shot.life = 0; continue; }
         }
       }
-      if ((shot.type === 'fire' || shot.type === 'ice') && Math.floor(shot.age * 60) % 3 === 0) this.particles.burst(shot.x + 7, shot.y + 7, 1, shot.type === 'ice' ? ['#b9ecfa'] : ['#fdb26d'], 38, 40);
+      if ((shot.type === 'fire' || shot.type === 'ice' || shot.type === 'missile' || shot.type === 'flame') && Math.floor(shot.age * 60) % 3 === 0) {
+        const trail = shot.type === 'ice' ? ['#b9ecfa'] : shot.type === 'missile' ? ['#dfafff', '#fff3c4'] : ['#fdb26d', '#ff7b47'];
+        this.particles.burst(shot.x + shot.w * 0.5, shot.y + shot.h * 0.5, 1, trail, 38, 35);
+      }
       for (const e of this.enemies) {
         if (!e.alive || !e.visible || shot.hit.has(e) || !overlaps(shot, e)) continue;
-        if (shot.type === 'fire' && (e.state === 'shell' || e.state === 'rolling') && this.has('billiards')) {
+        const canIgniteShell = shot.type === 'fire' || shot.type === 'flame' || shot.element === 'fire' || shot.element === 'both';
+        if (canIgniteShell && (e.state === 'shell' || e.state === 'rolling') && this.has('billiards')) {
           e.flaming = true;
           e.y += e.h - 27;
           e.h = 27;
           if (e.state === 'shell') e.kick(Math.sign(shot.vx) || 1, 475);
-          shot.life = 0;
-          break;
+          if (!shot.pierce) { shot.life = 0; break; }
+          shot.hit.add(e);
+          continue;
         }
-        const blocked = e.kind === 'guard' && shot.type === 'fire' && Math.sign(shot.x - e.center) === e.face;
+        const blocked = e.kind === 'guard' && !shot.pierce && shot.type !== 'flame' && shot.type !== 'ice' && Math.sign(shot.x - e.center) === e.face;
         if (!blocked) {
-          if (shot.type === 'ice') { e.chilled = 3.5; e.stunned = 0.55; }
-          if (shot.type === 'fire' && this.has('fire')) { e.burn = 1.8; e.burnTick = 0.4; }
-          this.hitEnemy(e, shot.damage * (shot.type === 'ice' ? 0.62 : 1));
+          const chill = shot.type === 'ice' || shot.element === 'ice' || shot.element === 'both';
+          const burn = (shot.type === 'fire' && this.has('fire')) || shot.type === 'flame' || shot.element === 'fire' || shot.element === 'both';
+          if (chill) { e.chilled = 3.5; e.stunned = Math.max(e.stunned, 0.55); }
+          if (burn) { e.burn = 1.8; e.burnTick = 0.4; }
+          if (shot.type === 'laser' && shot.h >= 12) e.stunned = Math.max(e.stunned, 0.4);
+          const mul = shot.type === 'ice' && e.kind !== 'plant' ? 0.68 : 1;
+          this.hitEnemy(e, shot.damage * mul);
+          if (shot.splash > 0) this.splashDamage(e.center, e.y + 8, shot.splash, shot.damage * 0.5, e);
         }
         shot.hit.add(e);
         this.particles.burst(shot.x, shot.y, 6, blocked ? ['#baddf1'] : GOLD);
-        if (shot.type !== 'wave') {
-          if (shot.bounces > 0 && !blocked) { shot.bounces--; shot.vx *= -1; shot.vy = -240; shot.damage *= 1.2; }
+        if (!shot.pierce) {
+          if (shot.bounces > 0 && !blocked) { shot.bounces--; shot.vx *= -1; if (shot.type === 'fire' || shot.type === 'ice') shot.vy = -240; shot.damage *= 1.2; }
           else shot.life = 0;
           break;
         }
@@ -468,7 +773,9 @@ export class Stage {
       }
       if (p.recover > 0 || p.hearts <= 0) continue;
       if (p.star > 0 && overlaps(p, enemy)) { this.defeat(enemy); continue; }
-      if (enemy.state === 'active' && enemy.chilled > 0 && overlaps(p, enemy) && !p.falling) enemy.hideInShell();
+      if (enemy.state === 'active' && enemy.chilled > 0 && enemy.kind !== 'plant' && enemy.kind !== 'cannonball' && overlaps(p, enemy) && !p.falling) {
+        enemy.hideInShell(enemy.kind !== 'koopa');
+      }
       if (enemy.state === 'shell' && enemy.stateTime <= 0 && overlaps(p, enemy)) {
         enemy.kick(Math.sign(enemy.center - p.center) || p.face, 410 * (this.tags.projectile >= 2 ? 1.3 : 1));
         this.feedback.audio.play('shellKick');
@@ -483,7 +790,7 @@ export class Stage {
           this.hitBoss(0.65, enemy.center, enemy.y);
         }
         if (enemy.kind === 'wing' && !enemy.wingLost) { enemy.wingLost = true; enemy.vy = 160; }
-        else if ((enemy.kind === 'koopa' && enemy.state === 'active') || enemy.state === 'rolling') enemy.hideInShell();
+        else if ((enemy.kind === 'koopa' && enemy.state === 'active') || enemy.state === 'rolling') enemy.hideInShell(enemy.frozenShell);
         else this.hitEnemy(enemy, press);
         p.y = Math.min(p.y, enemy.y - p.h);
         p.bounce(this.input.held('jump'), this.tags.stomp >= 2 ? 1.15 : 1);
@@ -592,6 +899,8 @@ export class Stage {
     if (this.finished || this.player.hearts <= 0) return;
     this.time += dt;
     this.redFlash = Math.max(0, this.redFlash - dt);
+    this.brickDelay = Math.max(0, this.brickDelay - dt);
+    this.heavyBoost = Math.max(0, this.heavyBoost - dt);
     this.particles.tick(dt);
     this.map.tick(dt, this.time);
     if (this.flagTime > 0) { this.flagTick(dt); this.camera.tick(dt); return; }
@@ -606,6 +915,8 @@ export class Stage {
     }
     this.enemyTick(dt);
     this.bossTick(dt);
+    this.podTick(dt);
+    this.orbitTick();
     this.projectileTick(dt);
     for (const item of this.pickups) {
       item.life -= dt;
@@ -632,7 +943,21 @@ export class Stage {
       if (item.life > 0 && !this.player.recover && overlaps(item, this.player)) {
         item.life = 0;
         if (item.kind === 'crystal') {
+          const alreadyPowered = this.player.powered;
           this.player.setPower(true, this.map);
+          if (alreadyPowered) {
+            if (this.player.shield < 4) {
+              this.player.shield++;
+              this.particles.text(this.player.center, this.player.y - 12, '+1 SHIELD', '#8ceaff');
+            } else {
+              this.collect(item.x + 8, item.y, 12);
+            }
+            if (this.player.arsenalTime > 0) {
+              this.player.arsenalTime = Math.min(this.player.arsenalMax, this.player.arsenalTime + 6);
+            }
+          } else {
+            this.particles.text(this.player.center, this.player.y - 12, 'POWER UP!', '#ffad9b');
+          }
           this.feedback.audio.play('powerup');
           this.particles.burst(item.x, item.y, 18, ['#ffad9b', '#ff7e91', '#ffdf9a'], 130, 40, true);
         } else this.collect(item.x + 8, item.y, item.value);
@@ -671,6 +996,8 @@ export class Stage {
     this.map.draw(ctx, renderer, this.camera.x, this.time, this.world);
     this.boss?.draw(ctx, renderer);
     for (const enemy of this.enemies) if (enemy.x >= this.camera.x - 48 && enemy.x <= this.camera.x + WIDTH + 48) enemy.draw(ctx, renderer, this.time);
+    for (const pod of this.pods) if (pod.x >= this.camera.x - 56 && pod.x <= this.camera.x + WIDTH + 56) pod.draw(ctx, renderer, this.time);
+    for (const emblem of this.emblems) if (emblem.x >= this.camera.x - 40 && emblem.x <= this.camera.x + WIDTH + 40) emblem.draw(ctx, renderer, this.time);
     for (const item of this.pickups) {
       if (item.x < this.camera.x - 26 || item.x > this.camera.x + WIDTH + 26) continue;
       const frame = Math.floor(this.time * 9 + item.x * 0.02) % 4;

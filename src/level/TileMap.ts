@@ -46,8 +46,10 @@ export class TileMap {
   candidates(box: Box) {
     const tiles: Tile[] = [];
     const minX = Math.max(0, Math.floor(box.x / TILE));
-    const maxX = Math.min(this.columns - 1, Math.floor((box.x + box.w) / TILE));
-    for (let y = Math.floor(box.y / TILE); y <= Math.floor((box.y + box.h) / TILE); y++) {
+    const maxX = Math.min(this.columns - 1, Math.floor((box.x + Math.max(0, box.w - 0.001)) / TILE));
+    const minY = Math.floor(box.y / TILE);
+    const maxY = Math.floor((box.y + Math.max(0, box.h - 0.001)) / TILE);
+    for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
         const tile = this.get(x, y);
         if (tile) tiles.push(tile);

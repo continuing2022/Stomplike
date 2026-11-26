@@ -53,6 +53,7 @@ export class MetaProgression {
 
   get stars() { return this.data.stars; }
   get wins() { return this.data.wins; }
+  get bestHeat() { return this.data.bestHeat; }
   get heat() { return this.data.heat; }
   get selected() { return CHARACTERS.find(char => char.id === this.data.selected) ?? CHARACTERS[0]; }
   get muted() { return this.data.muted; }

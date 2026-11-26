@@ -1,7 +1,7 @@
 const KEYS = {
   left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
   jump: ['Space', 'KeyZ', 'KeyW', 'ArrowUp'],
-  run: ['ShiftLeft', 'ShiftRight', 'KeyJ', 'KeyX'],
+  run: ['ShiftLeft', 'ShiftRight'],
   skill: ['KeyJ', 'KeyX'], down: ['KeyS', 'ArrowDown'],
 } as const;
 

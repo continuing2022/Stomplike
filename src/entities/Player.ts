@@ -1,9 +1,11 @@
 import { HEIGHT } from '../engine/GameEngine';
-import { approach, clamp, move, type Body, type Collider } from '../engine/Physics';
+import { approach, clamp, move, overlaps, type Body, type Collider } from '../engine/Physics';
 import type { InputManager } from '../engine/InputManager';
 import type { PixelRenderer } from '../graphics/PixelRenderer';
 import { HEROES } from '../graphics/SpriteData';
 import { Tile, type Platform, type TileMap } from '../level/TileMap';
+import { FLAME_ORB } from './Projectile';
+import { EMBLEM_META, type ArsenalKind } from './SupplyPod';
 
 export interface PlayerEvents {
   jump: () => void;
@@ -36,6 +38,12 @@ export class Player implements Body {
   star = 0;
   speedBoost = 0;
   coinBoost = 0;
+  arsenal?: ArsenalKind;
+  arsenalLevel: 1 | 2 = 1;
+  arsenalTime = 0;
+  arsenalMax = 20;
+  rapidTime = 0;
+  orbitAngle = 0;
   mayPound = false;
   pounding = false;
   doubleJump = false;
@@ -67,12 +75,30 @@ export class Player implements Body {
     this.powered = active;
   }
 
+  orbitPositions(): Array<{ x: number; y: number }> {
+    if (this.arsenal !== 'F' || this.arsenalTime <= 0 || this.recover > 0) return [];
+    const count = this.arsenalLevel === 2 ? 3 : 2;
+    const cy = this.y + this.h * 0.5;
+    const out: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i < count; i++) {
+      const a = this.orbitAngle + (i * Math.PI * 2) / count;
+      out.push({ x: this.center + Math.cos(a) * 34, y: cy + Math.sin(a) * 30 });
+    }
+    return out;
+  }
+
   tick(dt: number, input: InputManager, map: TileMap, events: PlayerEvents, gravity = 1, friction = 1, abyss = HEIGHT + 54) {
     this.invulnerable = Math.max(0, this.invulnerable - dt);
     this.star = Math.max(0, this.star - dt);
     this.hurtTime = Math.max(0, this.hurtTime - dt);
     this.speedBoost = Math.max(0, this.speedBoost - dt);
     this.coinBoost = Math.max(0, this.coinBoost - dt);
+    this.rapidTime = Math.max(0, this.rapidTime - dt);
+    if (this.arsenalTime > 0) {
+      this.arsenalTime = Math.max(0, this.arsenalTime - dt);
+      if (!this.arsenalTime) { this.arsenal = undefined; this.arsenalLevel = 1; }
+    }
+    this.orbitAngle += dt * (this.arsenalLevel === 2 ? 6.2 : 5.0);
     if (this.recover > 0) {
       this.recover = Math.max(0, this.recover - dt);
       if (!this.recover) {
@@ -88,8 +114,20 @@ export class Player implements Body {
     if (this.powered && this.h < 38) this.setPower(true, map);
     if (this.floor?.oneWay) {
       const platform = this.floor as Platform;
-      this.x += platform.dx;
-      this.y += platform.dy;
+      if (platform.dx) {
+        this.x += platform.dx;
+        for (const tile of map.colliders(this)) {
+          if (tile.oneWay || !overlaps(this, tile)) continue;
+          this.x = platform.dx > 0 ? tile.x - this.w : tile.x + tile.w;
+        }
+      }
+      if (platform.dy) {
+        this.y += platform.dy;
+        for (const tile of map.colliders(this)) {
+          if (tile.oneWay || !overlaps(this, tile)) continue;
+          this.y = platform.dy > 0 ? tile.y - this.h : tile.y + tile.h;
+        }
+      }
     }
     const dir = Number(input.held('right')) - Number(input.held('left'));
     this.crouch = this.grounded && input.held('down');
@@ -97,7 +135,7 @@ export class Player implements Body {
     const reversing = this.grounded && dir !== 0 && Math.sign(this.vx) === -dir && Math.abs(this.vx) > 55;
     if (reversing && !this.skidding) events.skid();
     this.skidding = reversing;
-    const speed = (input.held('run') ? 330 : 220) * this.speedScale * (this.speedBoost > 0 ? 1.2 : 1) * (this.coinBoost > 0 ? 1.15 : 1);
+    const speed = (input.held('run') ? 330 : 220) * this.speedScale * (this.speedBoost > 0 ? 1.2 : 1) * (this.coinBoost > 0 ? 1.15 : 1) * (this.rapidTime > 0 ? 1.15 : 1);
     if (this.hurtTime < 0.15) {
       const accel = dir && !this.crouch ? 1600 * (this.grounded ? 1 : 0.75) * (reversing ? 2.2 : 1) : 1400 * (this.grounded ? friction : 0.43);
       this.vx = approach(this.vx, this.crouch ? 0 : dir * speed, accel * dt);
@@ -163,14 +201,28 @@ export class Player implements Body {
   }
 
   draw(ctx: CanvasRenderingContext2D, renderer: PixelRenderer, time: number) {
+    const orbits = this.orbitPositions();
+    if (orbits.length) {
+      ctx.save();
+      ctx.shadowColor = '#ff8844';
+      ctx.shadowBlur = 10;
+      for (const orb of orbits) {
+        ctx.save();
+        ctx.translate(orb.x, orb.y);
+        ctx.rotate(time * 12);
+        renderer.draw(ctx, FLAME_ORB, -8, -8, 16, 16);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
     if (this.recover > 0 || (this.invulnerable > 0 && this.hurtTime === 0 && Math.floor(time * 15) % 2)) return;
     const pose = this.hurtTime ? 'hurt' : this.crouch ? 'crouch' : this.skidding ? 'skid' :
       this.pounding ? 'fall' : !this.grounded ? this.vy < 0 ? 'jump' : 'fall' :
       Math.abs(this.vx) > 27 ? 'run' + Math.floor(time * (Math.abs(this.vx) / 27 + 4)) % 3 : 'idle';
     const size = this.powered ? 48 : 40;
-    if (this.powered || this.star > 0) {
-      ctx.shadowColor = this.star > 0 ? '#fff08e' : '#ff9f8a';
-      ctx.shadowBlur = this.star > 0 ? 16 : 8;
+    if (this.powered || this.star > 0 || this.arsenal) {
+      ctx.shadowColor = this.star > 0 ? '#fff08e' : this.arsenal ? EMBLEM_META[this.arsenal].color : '#ff9f8a';
+      ctx.shadowBlur = this.star > 0 ? 16 : 9;
     }
     renderer.draw(ctx, HEROES[this.skin][pose], this.center - size / 2 + (this.face > 0 ? 3 : -3), this.feet - size + 2, size, size, this.face < 0);
     ctx.shadowBlur = 0;
