@@ -2,9 +2,9 @@ import { CHARACTERS } from '../roguelike/Characters';
 import { TALENTS, type MetaProgression, type Talent } from '../roguelike/MetaProgression';
 import type { RunSummary } from '../roguelike/RunManager';
 import { COINS, HEROES } from '../graphics/SpriteData';
-import { MODIFIERS, WORLD_NAMES } from '../level/LevelGenerator';
+import { WORLD_NAMES } from '../level/LevelGenerator';
 import { FLAG_NAMES, type RunManager } from '../roguelike/RunManager';
-import { RARITY_NAMES, TAGS, type Relic, type Tag } from '../roguelike/Relics';
+import { RARITY_NAMES, STARTER_RELICS, TAGS, type Relic, type Tag } from '../roguelike/Relics';
 import type { PixelRenderer, Sprite } from '../graphics/PixelRenderer';
 
 export interface Choice {
@@ -154,11 +154,30 @@ export class Overlays {
     return row;
   }
 
+  starter(run: RunManager, choose: (relic: Relic) => void, back: () => void) {
+    this.show({
+      style: 'reward-view', eyebrow: WORLD_NAMES[run.world] + ' / 出发起誓',
+      title: '选择起步流派',
+      intro: '选定一件初始战技立即解锁主动能力；后续遗物抽取留有流派偏向槽，空投补给也会联动强化。',
+      choices: STARTER_RELICS.map(relic => this.relic(relic, run, () => choose(relic))),
+      actions: [{ title: '返回大厅', select: back }],
+    });
+  }
+
   rewards(run: RunManager, choose: (relic?: Relic) => void, reroll: () => void) {
+    const intro = !run.rewards.length
+      ? '符合条件的遗物已全部收集'
+      : run.current.kind === 'elite'
+        ? (run.pendingElite
+          ? '⚔ 精英试炼达成！额外获得「' + run.pendingElite.name + '」并解锁 4 选 1'
+          : '已突破精英关（未完成试炼目标，未获额外稀有遗物）')
+        : (run.lastTrialDone
+          ? '✦ 挑战达成！已解锁第 4 个遗物选项'
+          : '选择一件遗物（达成关内挑战可解锁第 4 选项）');
     this.show({
       style: 'reward-view', eyebrow: WORLD_NAMES[run.world] + ' / 强化',
       title: FLAG_NAMES[run.grade],
-      intro: run.pendingElite ? '精英奖励已收入背包 · ' + run.pendingElite.name : run.rewards.length ? '选择一件遗物' : '符合条件的遗物已全部收集',
+      intro,
       details: this.tags(run),
       choices: run.rewards.map(relic => this.relic(relic, run, () => choose(relic))),
       actions: run.rewards.length
@@ -172,7 +191,7 @@ export class Overlays {
       style: 'route-view', eyebrow: WORLD_NAMES[run.world] + ' / 节点 ' + (run.depth + 1) + ' · 4',
       title: run.depth >= 3 ? '守关挑战' : '选择下一站', details: this.tags(run),
       choices: run.routes.map((node, index) => ({
-        title: node.name, detail: node.modifier === 'normal' ? node.detail : MODIFIERS[node.modifier] + ' · 额外稀有遗物',
+        title: node.name, detail: node.detail,
         label: ({ stage: '普通', elite: '精英', shop: '商店', event: '奇遇', boss: '首领' })[node.kind],
         accent: ({ stage: '#82dfc1', elite: '#f9a6ab', shop: '#ffdc7e', event: '#cea2f9', boss: '#ffae80' })[node.kind],
         select: () => select(index),
@@ -303,8 +322,9 @@ export class Overlays {
     });
   }
 
-  pause(run: RunManager, resume: () => void, settle: () => void) {
+  pause(run: RunManager, resume: () => void, settle: () => void, trialNote?: string) {
     const details = document.createElement('div');
+    if (trialNote) details.append(this.line('p', 'panel-intro', trialNote));
     details.append(this.tags(run));
     if (run.relics.length) {
       const inventory = document.createElement('ul');

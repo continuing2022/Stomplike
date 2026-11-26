@@ -5,8 +5,8 @@ import { InputManager } from './engine/InputManager';
 import { PixelRenderer } from './graphics/PixelRenderer';
 import { BRICK, COINS, CRYSTAL, GROUND, HEROES, QUESTION, SOIL, STAR } from './graphics/SpriteData';
 import { drawShop, drawTitle } from './graphics/TitleScene';
-import { POD_PRELOAD_SPRITES } from './entities/SupplyPod';
-import { generateArena, generateLevel } from './level/LevelGenerator';
+import { ARSENAL_DURATION, POD_PRELOAD_SPRITES } from './entities/SupplyPod';
+import { generateArena, generateLevel, TRIAL_META } from './level/LevelGenerator';
 import { Stage } from './level/Stage';
 import { CHARACTERS } from './roguelike/Characters';
 import { MetaProgression } from './roguelike/MetaProgression';
@@ -14,7 +14,7 @@ import { NORMAL, RunManager, type Node } from './roguelike/RunManager';
 import { drawHUD } from './ui/HUD';
 import { Overlays } from './ui/Overlays';
 
-type Screen = 'title' | 'characters' | 'talents' | 'heat' | 'confirm' | 'play' | 'pause' | 'routes' | 'shop' | 'event' | 'fountain' | 'rewards' | 'settlement';
+type Screen = 'title' | 'starter' | 'characters' | 'talents' | 'heat' | 'confirm' | 'play' | 'pause' | 'routes' | 'shop' | 'event' | 'fountain' | 'rewards' | 'settlement';
 
 class Game {
   private readonly ctx = document.querySelector<HTMLCanvasElement>('#game')!.getContext('2d')!;
@@ -61,7 +61,7 @@ class Game {
     this.audio.unlock();
     if (event.code === 'KeyM' && !event.repeat) { this.toggleSound(); return; }
     if (event.target === this.sound && (event.code === 'Space' || event.code === 'Enter')) return;
-    if (event.code === 'Escape' && !event.repeat && ['characters', 'talents', 'heat', 'confirm'].includes(this.screen)) {
+    if (event.code === 'Escape' && !event.repeat && ['starter', 'characters', 'talents', 'heat', 'confirm'].includes(this.screen)) {
       event.preventDefault();
       if (this.screen === 'confirm') this.talents();
       else this.title();
@@ -138,7 +138,12 @@ class Game {
 
   private start() {
     this.run = new RunManager(Date.now(), this.meta.runOptions());
-    this.play(NORMAL);
+    this.screen = 'starter';
+    this.audio.setTrack('lobby');
+    this.menus.starter(this.run, relic => {
+      this.run.add(relic);
+      this.play(NORMAL);
+    }, () => this.title());
   }
 
   private characters() {
@@ -182,7 +187,9 @@ class Game {
   private newStage() {
     const { run } = this;
     const seed = run.nextSeed();
-    const level = run.current.kind === 'boss' ? generateArena(seed, run.world) : generateLevel(seed, run.world, run.depth + 1, run.current.modifier);
+    const level = run.current.kind === 'boss'
+      ? generateArena(seed, run.world)
+      : generateLevel(seed, run.world, run.depth + 1, run.current.modifier, run.current.trial);
     return new Stage(level, this.input, { audio: this.audio, freeze: seconds => this.engine.freeze(seconds) }, run);
   }
 
@@ -203,7 +210,11 @@ class Game {
     this.screen = 'pause';
     this.input.clear();
     this.audio.pause(true);
-    this.menus.pause(this.run, () => this.resume(), () => this.settle(false, true));
+    const s = this.stage;
+    const trialNote = s && !s.boss
+      ? `${this.run.current.kind === 'elite' ? '精英试炼' : '本关挑战'}：${TRIAL_META[s.trial].routeDesc}（${s.trialDone ? '已达成' : `${s.trialProgress}/${s.trialTarget}`}）`
+      : undefined;
+    this.menus.pause(this.run, () => this.resume(), () => this.settle(false, true), trialNote);
   }
 
   private resume() {
@@ -316,7 +327,7 @@ class Game {
 
   private draw(dt: number) {
     this.touch.hidden = this.screen !== 'play';
-    const lobby = ['title', 'characters', 'talents', 'heat', 'confirm'].includes(this.screen);
+    const lobby = ['title', 'starter', 'characters', 'talents', 'heat', 'confirm'].includes(this.screen);
     const stage = this.stage;
     this.hud.hidden = lobby;
     if (lobby || !stage) {
@@ -335,10 +346,17 @@ class Game {
       world: this.run.world, depth: this.run.depth, modifier: this.run.current.modifier, heat: this.run.heat,
       combo: inStage ? p.combo : 0, powered: inStage && p.powered,
       progress: inStage && !stage.boss ? p.center / stage.level.flag.x : undefined,
+      trial: inStage && !stage.boss ? {
+        kind: stage.trial,
+        progress: stage.trialProgress,
+        target: stage.trialTarget,
+        done: stage.trialDone,
+        elite: this.run.current.kind === 'elite',
+      } : undefined,
       arsenal: inStage ? p.arsenal : undefined,
       arsenalLevel: inStage ? p.arsenalLevel : 1,
       arsenalTime: inStage ? p.arsenalTime : 0,
-      arsenalMax: inStage ? p.arsenalMax : 20,
+      arsenalMax: inStage ? p.arsenalMax : ARSENAL_DURATION,
       rapidTime: inStage ? p.rapidTime : 0,
       starTime: inStage ? p.star : 0,
     });

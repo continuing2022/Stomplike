@@ -3,10 +3,13 @@ import { clamp, type Body } from '../engine/Physics';
 import type { PixelRenderer, Sprite } from '../graphics/PixelRenderer';
 import { pixels } from '../graphics/SpriteData';
 import type { TileMap } from '../level/TileMap';
+import type { Tag } from '../roguelike/Relics';
 
 export type ArsenalKind = 'S' | 'L' | 'M' | 'F';
 export type EmblemKind = ArsenalKind | 'B' | 'R';
 
+export const ARSENAL_DURATION = 11;
+export const RAPID_DURATION = 10;
 export const EMBLEM_ORDER: readonly EmblemKind[] = ['S', 'L', 'M', 'F', 'B', 'R'];
 
 export const EMBLEM_META: Readonly<Record<EmblemKind, {
@@ -271,11 +274,15 @@ export class WingedEmblem implements Body {
   }
 }
 
-export function pickEmblem(random: () => number, current?: ArsenalKind): EmblemKind {
+export function pickEmblem(random: () => number, current?: ArsenalKind, favoredTag?: Tag): EmblemKind {
   const roll = random();
   if (roll < 0.14) return 'B';
   if (roll < 0.28) return 'R';
   const weapons: ArsenalKind[] = ['S', 'L', 'M', 'F'];
   if (current && random() < 0.22) return current;
+  if (favoredTag && random() < 0.45) {
+    const synergyWeapon: Record<Tag, ArsenalKind> = { stomp: 'F', block: 'L', projectile: 'S', greed: 'M' };
+    return synergyWeapon[favoredTag];
+  }
   return weapons[Math.floor(random() * weapons.length)];
 }

@@ -7,23 +7,23 @@ import { Boss, type BossEvents } from '../entities/Boss';
 import { Enemy, type EnemyShot } from '../entities/Enemy';
 import { Player, type PlayerEvents } from '../entities/Player';
 import { Projectile } from '../entities/Projectile';
-import { EMBLEM_META, pickEmblem, SupplyPod, WingedEmblem } from '../entities/SupplyPod';
+import { ARSENAL_DURATION, EMBLEM_META, pickEmblem, RAPID_DURATION, SupplyPod, WingedEmblem } from '../entities/SupplyPod';
 import { drawBackground } from '../graphics/Background';
 import { ParticleSystem } from '../graphics/ParticleSystem';
 import type { PixelRenderer } from '../graphics/PixelRenderer';
 import { CASTLE, COINS, CRYSTAL, FLAG, STAR } from '../graphics/SpriteData';
-import { countTags, type Effect } from '../roguelike/Relics';
+import { countTags, pickPreferredTag, type Effect } from '../roguelike/Relics';
 import type { RunManager } from '../roguelike/RunManager';
-import { type Level, type Modifier } from './LevelGenerator';
+import { TRIAL_META, type Level, type Modifier, type TrialKind } from './LevelGenerator';
 import { Tile, TileMap } from './TileMap';
 
 export type FlagGrade = 'clear' | 'great' | 'perfect';
-export interface StageResult { grade: FlagGrade; coins: number; kills: number; bestCombo: number }
+export interface StageResult { grade: FlagGrade; coins: number; kills: number; bestCombo: number; trialDone: boolean }
 
 export interface StageFeedback { audio: ChiptuneAudio; freeze: (seconds: number) => void }
 const GOLD = ['#fff1a0', '#ffd05c', '#ffad51'];
 
-interface Pickup extends Body { kind: 'coin' | 'crystal'; life: number; moving: boolean; value: number; harmful: boolean }
+interface Pickup extends Body { kind: 'coin' | 'crystal' | 'crest'; life: number; moving: boolean; value: number; harmful: boolean }
 
 export class Stage {
   readonly particles = new ParticleSystem();
@@ -53,9 +53,16 @@ export class Stage {
   private podMilestones: number[];
   private nextArenaPod = 5.5;
   private lastBossPhase = 1;
+  private nextFireRain = 1.1;
+  private fireCycle = 0;
+  private readonly pendingEmbers: Array<{ x: number; timer: number }> = [];
   readonly map: TileMap;
   readonly world: number;
   readonly modifier: Modifier;
+  readonly trial: TrialKind;
+  readonly trialTarget: number;
+  trialProgress = 0;
+  trialDone = false;
   private flagTime = 0;
   private flagY = 0;
   private flagStartY = 0;
@@ -76,6 +83,8 @@ export class Stage {
     this.map = level.map;
     this.world = level.world;
     this.modifier = level.modifier;
+    this.trial = level.trial;
+    this.trialTarget = TRIAL_META[level.trial].target;
     this.podMilestones = level.arena ? [] : run.current.kind === 'elite' ? [0.14, 0.39, 0.64, 0.84] : [0.16, 0.48, 0.76];
     const character = run.character;
     this.player = new Player(84, 13 * TILE - 30, character.skin);
@@ -111,7 +120,9 @@ export class Stage {
     this.player.shield = run.shield;
     this.player.mayPound = this.effects.has('pound');
     for (const coin of level.coins) this.pickup(coin.x, coin.y, 'coin', 2);
-    for (const spawn of level.enemies) this.enemies.push(new Enemy(spawn.kind, spawn.x, spawn.y, spawn.direction, run.heat + (run.current.kind === 'elite' ? 1 : 0)));
+    for (const crest of level.crests) this.pickup(crest.x, crest.y, 'crest', 8);
+    const eliteBoost = run.current.kind === 'elite' ? (this.modifier === 'double-coins' ? 2.2 : 1.4) : 0;
+    for (const spawn of level.enemies) this.enemies.push(new Enemy(spawn.kind, spawn.x, spawn.y, spawn.direction, run.heat + eliteBoost));
     this.flagY = level.flag.top + 6;
     this.playerEvents = {
       jump: () => { this.particles.dust(this.player.center, this.player.feet); this.feedback.audio.play('jump'); },
@@ -128,6 +139,17 @@ export class Stage {
 
   private has(effect: Effect) { return this.effects.has(effect); }
 
+  private advanceTrial(kind: TrialKind, value = 1, absolute = false) {
+    if (this.boss || this.trialDone || this.trial !== kind) return;
+    this.trialProgress = Math.min(this.trialTarget, absolute ? Math.max(this.trialProgress, value) : this.trialProgress + value);
+    if (this.trialProgress >= this.trialTarget) {
+      this.trialDone = true;
+      this.feedback.audio.play('powerup');
+      this.particles.burst(this.player.center, this.player.y - 8, 24, ['#72efdd', '#ffe66d', '#ffffff'], 140, 50, true);
+      this.particles.text(this.player.center, this.player.y - 22, this.run.current.kind === 'elite' ? 'TRIAL CLEAR!' : 'RELIC +1!', '#72efdd');
+    }
+  }
+
   private triggerBlockSynergy(x: number, y: number) {
     if (this.tags.block >= 2) {
       for (let i = 0; i < 4; i++) this.projectiles.push(new Projectile('shard', x, y - 20, (i - 1.5) * 120, -195 - i % 2 * 65, 1.15));
@@ -141,7 +163,7 @@ export class Stage {
 
   private spawnPod(arena = false) {
     const cycling = this.random() < (arena ? 0.42 : this.run.current.kind === 'elite' ? 0.48 : 0.34);
-    const kind = pickEmblem(this.random, this.player.arsenal);
+    const kind = pickEmblem(this.random, this.player.arsenal, pickPreferredTag(this.tags, this.random));
     if (arena) {
       const fromLeft = this.player.center > WIDTH * 0.5;
       const spawnX = fromLeft ? 44 : WIDTH - 80;
@@ -195,7 +217,7 @@ export class Stage {
       return;
     }
     if (emblem.kind === 'R') {
-      p.rapidTime = 15;
+      p.rapidTime = RAPID_DURATION;
       if (p.arsenal && p.arsenalTime > 0) {
         p.arsenalLevel = 2;
         p.arsenalTime = p.arsenalMax;
@@ -208,8 +230,8 @@ export class Stage {
     const upgrade = (p.arsenal === emblem.kind && p.arsenalTime > 0) || p.rapidTime > 0;
     p.arsenal = emblem.kind;
     p.arsenalLevel = upgrade ? 2 : 1;
-    p.arsenalMax = 20;
-    p.arsenalTime = 20;
+    p.arsenalMax = ARSENAL_DURATION;
+    p.arsenalTime = ARSENAL_DURATION;
     this.particles.text(p.center, p.y - 14, upgrade ? emblem.kind + ' MAX!' : meta.callout, meta.color);
   }
 
@@ -246,6 +268,9 @@ export class Stage {
         else this.fire('fire', x, y - 22, this.player.face);
       }
     }
+    if (this.tags.block >= 1 && this.player.arsenalTime > 0) {
+      this.player.arsenalTime = Math.min(this.player.arsenalMax, this.player.arsenalTime + 1);
+    }
     this.triggerBlockSynergy(x, y - 8);
     if (!broken) { this.feedback.audio.play('blockBump'); return; }
     this.map.remove(tile);
@@ -280,7 +305,6 @@ export class Stage {
       this.lastCoin = this.time;
       value = Math.round(value * Math.min(3, 1 + (this.coinChain - 1) * 0.23));
     }
-    value *= this.modifier === 'double-coins' ? 2 : 1;
     this.coins += value;
     this.balance += value;
     this.run.coinTowardsLife += value;
@@ -487,6 +511,11 @@ export class Stage {
 
   private stompEffects(x: number, y: number) {
     const p = this.player;
+    this.advanceTrial('combo3', this.bestCombo, true);
+    if (p.combo === 3 || p.combo === 4) this.advanceTrial('combo4', 1);
+    if (this.tags.stomp >= 1 && p.arsenalTime > 0) {
+      p.arsenalTime = Math.min(p.arsenalMax, p.arsenalTime + 1.5);
+    }
     if (this.has('thunder')) {
       const enemies = this.nearby(x, y, 220).filter(e => Math.abs(e.center - x) > 10).slice(0, 2);
       for (const e of enemies) {
@@ -506,7 +535,12 @@ export class Stage {
       p.shield++;
       this.particles.text(p.center, p.y - 14, '+1 SHIELD', '#8ceaff');
     }
-    if (this.tags.stomp >= 4 && p.combo % 3 === 0) { this.shock(x, y, this.damage(0.8)); p.extraJump = true; }
+    if (this.tags.stomp >= 4 && p.combo % 3 === 0) {
+      this.shock(x, y, this.damage(0.8));
+      if (p.doubleJump && !p.extraJump) p.extraJump = true;
+      else p.bonusJump = true;
+      this.particles.text(p.center, p.y - 16, 'AIR JUMP!', '#f89198');
+    }
     if (this.has('lava')) this.lava(x, y);
     if (this.has('windfall') && p.combo % 2 === 0) this.sprayCoins(x, y - 14, 10, 1);
   }
@@ -530,7 +564,12 @@ export class Stage {
     if (!fall && p.shield) p.shield--;
     else if (!fall && p.powered) p.setPower(false, this.map);
     else p.hearts--;
-    if (p.arsenalTime > 0) p.arsenalTime = Math.max(2, p.arsenalTime - 4);
+    if (!fall && this.modifier === 'double-coins' && this.balance > 0) {
+      const lost = Math.min(12, this.balance);
+      this.balance -= lost;
+      this.particles.text(p.center, p.y - 18, '−' + lost + 'G', '#ff9b7c');
+    }
+    if (p.arsenalTime > 0) p.arsenalTime = Math.max(1.5, p.arsenalTime - 3);
     p.invulnerable = 1.5;
     p.hurtTime = 0.26;
     p.combo = 0;
@@ -542,14 +581,22 @@ export class Stage {
   }
 
   get result(): StageResult {
-    return { grade: this.grade, coins: this.coins, kills: this.kills, bestCombo: this.bestCombo };
+    return { grade: this.grade, coins: this.coins, kills: this.kills, bestCombo: this.bestCombo, trialDone: this.trialDone };
   }
 
   private defeat(enemy: Enemy, shellCombo = 0) {
     if (!enemy.alive) return;
     enemy.squash();
     this.kills++;
-    const reward = (5 + shellCombo * 2) * (this.has('midas') ? 1.5 : 1);
+    this.advanceTrial('slayer8', this.kills, true);
+    if (enemy.kind === 'wing' || enemy.kind === 'mage') this.advanceTrial('aerial', 1);
+    if (shellCombo > 0) {
+      this.advanceTrial('shell3', 1);
+      this.advanceTrial('shell4', 1);
+    }
+    const arsenalGreed = this.tags.greed >= 1 && (this.player.arsenalTime > 0 || this.player.rapidTime > 0) ? 2 : 0;
+    const bounty = this.modifier === 'double-coins' ? 2 : 1;
+    const reward = (5 + shellCombo * 2 + arsenalGreed) * (this.has('midas') ? 1.5 : 1) * bounty;
     this.pickup(enemy.center - 8, enemy.y - 12, 'coin', Math.ceil(reward), true, shellCombo ? this.player.face * 48 : 0, -140);
     this.particles.burst(enemy.center, enemy.y + 8, 9, GOLD, 102, 110, true);
     if (shellCombo > 1) this.particles.text(enemy.center, enemy.y - 10, 'x' + shellCombo + '!');
@@ -627,6 +674,7 @@ export class Stage {
       }
       for (const shell of this.enemies) {
         if (shell.state === 'rolling' && overlaps(shell, pod)) {
+          this.advanceTrial('shell3', 1);
           this.breakPod(pod);
           break;
         }
@@ -663,8 +711,11 @@ export class Stage {
     const p = this.player;
     for (const shot of this.projectiles) {
       shot.tick(dt, this.map);
+      if (!shot.hostile && this.tags.block >= 1 && (shot.type === 'laser' || shot.type === 'flame')) {
+        for (const tile of this.map.candidates(shot)) if (overlaps(shot, tile)) this.hitBlock(tile);
+      }
       if (shot.life <= 0 || shot.type === 'lightning') continue;
-      if (this.boss && this.boss.world === 0 && shot.type === 'rock' && this.boss.vulnerable && overlaps(shot, this.boss)) {
+      if (!shot.hostile && this.boss && this.boss.world === 0 && shot.type === 'rock' && this.boss.vulnerable && overlaps(shot, this.boss)) {
         this.boss.expose();
         this.hitBoss(this.damage(1.5), shot.x, shot.y);
         shot.life = 0;
@@ -738,7 +789,8 @@ export class Stage {
 
   private enemyTick(dt: number) {
     const p = this.player;
-    const speed = (this.modifier === 'double-coins' ? 1.35 : 1) * (1 + this.run.heat * 0.07);
+    const modSpeed = this.modifier === 'double-coins' ? 1.38 : this.modifier === 'low-gravity' ? 1.2 : 1;
+    const speed = modSpeed * (1 + this.run.heat * 0.07);
     for (const enemy of this.enemies) {
       if (enemy.state !== 'rolling' && Math.abs(enemy.center - p.center) > WIDTH * 1.15) continue;
       if (enemy.homing && enemy.state === 'rolling') {
@@ -888,11 +940,38 @@ export class Stage {
     p.face = 1;
     p.invulnerable = 0;
     this.feedback.audio.play('flagpole');
-    const bonus = this.grade === 'perfect' ? 20 : this.grade === 'great' ? 12 : 10;
+    const bonus = this.grade === 'perfect' ? 25 : this.grade === 'great' ? 15 : 10;
     this.collect(flag.x, p.y - 18, bonus * (this.has('crown') ? 2 : 1));
     this.particles.burst(flag.x, p.y, this.grade === 'perfect' ? 54 : 21, GOLD, 170, 150, true);
     this.particles.text(flag.x, p.y - 29, this.grade === 'perfect' ? 'PERFECT!' : this.grade === 'great' ? 'GREAT!' : 'CLEAR!');
     if (this.grade === 'perfect') this.feedback.freeze(0.05);
+  }
+
+  private fireRainTick(dt: number) {
+    if (this.boss || !this.level.fireZones.length) return;
+    for (let i = this.pendingEmbers.length - 1; i >= 0; i--) {
+      const ember = this.pendingEmbers[i];
+      ember.timer -= dt;
+      if (Math.floor(ember.timer * 30) % 3 === 0) {
+        this.particles.burst(ember.x, 34, 2, ['#fff4b4', '#ff7b47'], 28, 0);
+      }
+      if (ember.timer <= 0) {
+        this.projectiles.push(new Projectile('rain', ember.x - 8, 28, -36, 175, 1, true));
+        this.pendingEmbers.splice(i, 1);
+      }
+    }
+    if (this.time < this.nextFireRain) return;
+    this.nextFireRain = this.time + 1.35;
+    const active = this.level.fireZones.find(z => z.endX > this.camera.x + 80 && z.startX < this.camera.x + WIDTH - 80);
+    if (!active) return;
+    const minX = Math.max(active.startX, this.camera.x + 96);
+    const maxX = Math.min(active.endX, this.camera.x + WIDTH - 64);
+    if (maxX <= minX) return;
+    const phaseShift = (this.fireCycle++ % 2) * 116;
+    for (let x = minX + phaseShift; x <= maxX; x += 232) {
+      this.pendingEmbers.push({ x, timer: 0.45 });
+      this.particles.burst(x, 34, 6, ['#fff4b4', '#ff924c'], 45, 0);
+    }
   }
 
   tick(dt: number) {
@@ -917,6 +996,7 @@ export class Stage {
     this.bossTick(dt);
     this.podTick(dt);
     this.orbitTick();
+    this.fireRainTick(dt);
     this.projectileTick(dt);
     for (const item of this.pickups) {
       item.life -= dt;
@@ -953,13 +1033,17 @@ export class Stage {
               this.collect(item.x + 8, item.y, 12);
             }
             if (this.player.arsenalTime > 0) {
-              this.player.arsenalTime = Math.min(this.player.arsenalMax, this.player.arsenalTime + 6);
+              this.player.arsenalTime = Math.min(this.player.arsenalMax, this.player.arsenalTime + 4);
             }
           } else {
             this.particles.text(this.player.center, this.player.y - 12, 'POWER UP!', '#ffad9b');
           }
           this.feedback.audio.play('powerup');
           this.particles.burst(item.x, item.y, 18, ['#ffad9b', '#ff7e91', '#ffdf9a'], 130, 40, true);
+        } else if (item.kind === 'crest') {
+          this.collect(item.x + 12, item.y, item.value);
+          this.advanceTrial('crests', 1);
+          this.particles.burst(item.x + 12, item.y + 12, 16, ['#72efdd', '#fff1a0', '#ffffff'], 115, 35, true);
         } else this.collect(item.x + 8, item.y, item.value);
       }
     }
@@ -1000,8 +1084,17 @@ export class Stage {
     for (const emblem of this.emblems) if (emblem.x >= this.camera.x - 40 && emblem.x <= this.camera.x + WIDTH + 40) emblem.draw(ctx, renderer, this.time);
     for (const item of this.pickups) {
       if (item.x < this.camera.x - 26 || item.x > this.camera.x + WIDTH + 26) continue;
-      const frame = Math.floor(this.time * 9 + item.x * 0.02) % 4;
-      renderer.draw(ctx, item.kind === 'coin' ? COINS[frame] : CRYSTAL, item.x, item.y + (item.moving ? 0 : Math.sin(this.time * 5 + item.x) * 2), item.w, item.h);
+      const bob = item.moving ? 0 : Math.sin(this.time * 5 + item.x) * 2;
+      if (item.kind === 'crest') {
+        ctx.save();
+        ctx.shadowColor = '#72efdd';
+        ctx.shadowBlur = 11;
+        renderer.draw(ctx, STAR, item.x, item.y + bob, item.w, item.h);
+        ctx.restore();
+      } else {
+        const frame = Math.floor(this.time * 9 + item.x * 0.02) % 4;
+        renderer.draw(ctx, item.kind === 'coin' ? COINS[frame] : CRYSTAL, item.x, item.y + bob, item.w, item.h);
+      }
     }
     for (const shot of this.projectiles) shot.draw(ctx, renderer);
     this.player.draw(ctx, renderer, this.time);

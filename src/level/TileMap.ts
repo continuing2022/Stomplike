@@ -21,6 +21,7 @@ export interface Platform extends Collider {
 
 export class TileMap {
   private readonly tiles = new Map<number, Tile>();
+  private readonly regrow: Array<{ x: number; y: number; timer: number }> = [];
   readonly platforms: Platform[] = [];
 
   constructor(readonly columns: number) {}
@@ -85,7 +86,20 @@ export class TileMap {
       tile.bump = Math.max(0, tile.bump - dt);
       tile.life -= dt;
       tile.collapse -= dt;
-      if (tile.life <= 0 || tile.collapse <= 0) this.remove(tile);
+      if (tile.life <= 0 || tile.collapse <= 0) {
+        if (tile.kind === 'cloud' && !Number.isFinite(tile.life) && tile.collapse <= 0) {
+          this.regrow.push({ x: tile.x / TILE, y: tile.y / TILE, timer: 3.0 });
+        }
+        this.remove(tile);
+      }
+    }
+    for (let i = this.regrow.length - 1; i >= 0; i--) {
+      const cloud = this.regrow[i];
+      cloud.timer -= dt;
+      if (cloud.timer <= 0) {
+        if (!this.get(cloud.x, cloud.y)) this.set(cloud.x, cloud.y, 'cloud');
+        this.regrow.splice(i, 1);
+      }
     }
     for (const p of this.platforms) {
       const offset = Math.sin(time * 1.55 + p.phase) * p.range;
@@ -116,6 +130,15 @@ export class TileMap {
         ctx.fillRect(tile.x + 12, tile.y + 8 - bump, 8, 16);
         ctx.fillRect(tile.x + 8, tile.y + 12 - bump, 16, 8);
       }
+      ctx.globalAlpha = 1;
+    }
+    for (const cloud of this.regrow) {
+      if (cloud.timer > 0.55) continue;
+      const px = cloud.x * TILE;
+      const py = cloud.y * TILE;
+      if (px < visible.x || px > visible.x + visible.w) continue;
+      ctx.globalAlpha = 0.32;
+      renderer.draw(ctx, CLOUD_TILE, px, py, TILE, TILE);
       ctx.globalAlpha = 1;
     }
     for (const p of this.platforms) {

@@ -2,7 +2,7 @@ import { HEIGHT } from '../engine/GameEngine';
 import { move, type Body } from '../engine/Physics';
 import type { PixelRenderer } from '../graphics/PixelRenderer';
 import { pixels } from '../graphics/SpriteData';
-import type { TileMap } from '../level/TileMap';
+import { Tile, type TileMap } from '../level/TileMap';
 
 export type EnemyKind = 'walker' | 'koopa' | 'plant' | 'wing' | 'miner' | 'mage' | 'guard' | 'cannonball';
 export type EnemyState = 'active' | 'squashed' | 'shell' | 'rolling' | 'gone';
@@ -115,7 +115,16 @@ export class Enemy implements Body {
     this.vy = Math.min(730, this.vy + 1160 * dt);
     const velocity = this.vx;
     const result = move(this, map, dt);
-    if (result.wall) {
+    const hitSpring = this.state === 'rolling'
+      ? (result.wall instanceof Tile && result.wall.kind === 'spring' ? result.wall : result.floor instanceof Tile && result.floor.kind === 'spring' ? result.floor : undefined)
+      : undefined;
+    if (hitSpring) {
+      hitSpring.bump = 0.2;
+      const dir = Math.sign(velocity || this.face) || 1;
+      this.face = dir;
+      this.vx = dir * Math.max(455, Math.abs(velocity));
+      if (this.vy > -180) this.vy = -415;
+    } else if (result.wall) {
       this.face *= -1;
       if (this.state === 'rolling') {
         this.vx = -velocity;

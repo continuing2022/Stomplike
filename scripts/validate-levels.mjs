@@ -27,6 +27,16 @@ try {
     }
     const path = findRoute(level);
     assert.ok(path.length > 0, `No base-jump route for seed ${seed} (world ${world + 1}, ${modifier})`);
+    for (const spawn of level.enemies) {
+      const col = Math.floor((spawn.x + 10) / 32);
+      const row = Math.floor((spawn.y + 10) / 32);
+      if (spawn.kind !== 'plant') assert.notEqual(level.map.get(col, row)?.kind, 'spring', `Enemy ${spawn.kind} overlaps spring`);
+      if (['walker', 'koopa', 'miner', 'guard'].includes(spawn.kind)) {
+        let floor = false;
+        for (let r = row + 1; r <= 14; r++) if (level.map.get(col, r)) { floor = true; break; }
+        assert.ok(floor, `Ground enemy ${spawn.kind} spawned over pit at col ${col}`);
+      }
+    }
     checked++;
   }
   console.log(`Verified chunk geometry and base-jump reachability on ${checked} generated levels across all three worlds.`);

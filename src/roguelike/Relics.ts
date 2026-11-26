@@ -56,10 +56,28 @@ export const RELICS: readonly Relic[] = [
   item('windfall', '天降横财', 'legendary', ['stomp', 'greed'], '每逢偶数空中连踩喷出十枚金币。', ['stomp', 'greed']),
 ];
 
+export const STARTER_IDS: readonly Effect[] = ['fire', 'pound', 'ice', 'portable'];
+export const STARTER_RELICS: readonly Relic[] = STARTER_IDS
+  .map(id => RELICS.find(relic => relic.id === id))
+  .filter((relic): relic is Relic => Boolean(relic));
+
 export function countTags(relics: readonly Relic[]) {
   const counts: Record<Tag, number> = { stomp: 0, block: 0, projectile: 0, greed: 0 };
   for (const relic of relics) for (const tag of relic.tags) counts[tag]++;
   return counts;
+}
+
+export function pickPreferredTag(counts: Readonly<Record<Tag, number>>, random: () => number): Tag | undefined {
+  const active = (Object.keys(TAGS) as Tag[]).filter(tag => counts[tag] > 0);
+  if (!active.length) return undefined;
+  const weights = active.map(tag => counts[tag] * counts[tag]);
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  let roll = random() * total;
+  for (let i = 0; i < active.length; i++) {
+    roll -= weights[i];
+    if (roll <= 0) return active[i];
+  }
+  return active[active.length - 1];
 }
 
 export function relicOffer(owned: readonly Relic[], amount: number, random: () => number, luck = 0, guaranteeRare = false, excluded: readonly Relic[] = []) {
@@ -67,6 +85,7 @@ export function relicOffer(owned: readonly Relic[], amount: number, random: () =
   const eligible = RELICS.filter(relic => !owned.includes(relic) &&
     (!relic.requires || relic.requires.every(tag => counts[tag] >= 2)));
   let pool = eligible.filter(relic => !excluded.includes(relic));
+  const favoredTag = amount >= 2 ? pickPreferredTag(counts, random) : undefined;
   const result: Relic[] = [];
   for (let i = 0; i < amount; i++) {
     if (!pool.length) pool = eligible.filter(relic => !result.includes(relic));
@@ -75,7 +94,20 @@ export function relicOffer(owned: readonly Relic[], amount: number, random: () =
     const rarity: Rarity = roll < 0.09 * (1 + luck) ? 'legendary' : (guaranteeRare && i === 0) || roll < 0.39 * (1 + luck) ? 'rare' : 'common';
     const matching = pool.filter(relic => relic.rarity === rarity);
     const rarer = pool.filter(relic => relic.rarity !== 'common');
-    const choices = matching.length ? matching : guaranteeRare && i === 0 && rarer.length ? rarer : pool;
+    let choices = matching.length ? matching : guaranteeRare && i === 0 && rarer.length ? rarer : pool;
+    if (i === 0 && favoredTag) {
+      if (guaranteeRare) {
+        const rareBase = matching.length && rarity !== 'common' ? matching : rarer.length ? rarer : pool;
+        const rareBiased = rareBase.filter(relic => relic.tags.includes(favoredTag));
+        choices = rareBiased.length ? rareBiased : rareBase;
+      } else {
+        const tagPool = pool.filter(relic => relic.tags.includes(favoredTag));
+        if (tagPool.length) {
+          const tagMatching = tagPool.filter(relic => relic.rarity === rarity);
+          choices = tagMatching.length ? tagMatching : tagPool;
+        }
+      }
+    }
     const relic = choices[Math.floor(random() * choices.length)];
     result.push(relic);
     pool = pool.filter(offer => offer !== relic);

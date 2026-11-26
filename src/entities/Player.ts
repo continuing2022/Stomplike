@@ -5,7 +5,7 @@ import type { PixelRenderer } from '../graphics/PixelRenderer';
 import { HEROES } from '../graphics/SpriteData';
 import { Tile, type Platform, type TileMap } from '../level/TileMap';
 import { FLAME_ORB } from './Projectile';
-import { EMBLEM_META, type ArsenalKind } from './SupplyPod';
+import { ARSENAL_DURATION, EMBLEM_META, type ArsenalKind } from './SupplyPod';
 
 export interface PlayerEvents {
   jump: () => void;
@@ -41,13 +41,14 @@ export class Player implements Body {
   arsenal?: ArsenalKind;
   arsenalLevel: 1 | 2 = 1;
   arsenalTime = 0;
-  arsenalMax = 20;
+  arsenalMax = ARSENAL_DURATION;
   rapidTime = 0;
   orbitAngle = 0;
   mayPound = false;
   pounding = false;
   doubleJump = false;
   extraJump = false;
+  bonusJump = false;
   speedScale = 1;
   jumpScale = 1;
   private coyote = 0;
@@ -107,6 +108,7 @@ export class Player implements Body {
         this.vx = this.vy = 0;
         this.pounding = false;
         this.falling = false;
+        this.bonusJump = false;
         this.invulnerable = 1.5;
       }
       return;
@@ -141,8 +143,12 @@ export class Player implements Body {
       this.vx = approach(this.vx, this.crouch ? 0 : dir * speed, accel * dt);
     }
     this.coyote = this.grounded ? 0.1 : Math.max(0, this.coyote - dt);
-    if (input.bufferedJump && !this.crouch && (this.coyote > 0 || (this.doubleJump && this.extraJump))) {
-      if (!this.coyote) this.extraJump = false;
+    const canDouble = this.doubleJump && this.extraJump;
+    if (input.bufferedJump && !this.crouch && (this.coyote > 0 || canDouble || this.bonusJump)) {
+      if (!this.coyote) {
+        if (this.bonusJump) this.bonusJump = false;
+        else this.extraJump = false;
+      }
       this.vy = -560 * this.jumpScale * (this.speedBoost > 0 ? 1.2 : 1);
       this.coyote = 0;
       this.grounded = false;
@@ -181,6 +187,7 @@ export class Player implements Body {
       if (!wasGrounded || this.pounding) events.land(this.pounding);
       this.pounding = false;
       this.extraJump = true;
+      this.bonusJump = false;
       this.combo = 0;
       if (map.safe(this.x, this.feet, this.w)) { this.safeX = this.x; this.safeY = this.feet; }
     }

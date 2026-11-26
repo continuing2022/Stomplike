@@ -1,6 +1,14 @@
 import type { Boss } from '../entities/Boss';
-import { EMBLEM_META, type ArsenalKind } from '../entities/SupplyPod';
-import { MODIFIERS, WORLD_NAMES, type Modifier, type World } from '../level/LevelGenerator';
+import { ARSENAL_DURATION, EMBLEM_META, type ArsenalKind } from '../entities/SupplyPod';
+import { MODIFIERS, TRIAL_META, WORLD_NAMES, type Modifier, type TrialKind, type World } from '../level/LevelGenerator';
+
+export interface TrialStatus {
+  kind: TrialKind;
+  progress: number;
+  target: number;
+  done: boolean;
+  elite: boolean;
+}
 
 export interface Status {
   hearts: number;
@@ -16,6 +24,7 @@ export interface Status {
   combo: number;
   powered: boolean;
   progress?: number;
+  trial?: TrialStatus;
   arsenal?: ArsenalKind;
   arsenalLevel?: 1 | 2;
   arsenalTime?: number;
@@ -36,6 +45,8 @@ interface HudDom {
   arsenalFill: HTMLElement;
   rapid: HTMLElement;
   star: HTMLElement;
+  trial: HTMLElement;
+  trialSig: string;
   worldText: HTMLElement;
   worldSig: string;
   progressWrap: HTMLElement;
@@ -62,6 +73,7 @@ function mount(root: HTMLElement): HudDom {
     </div>
     <div class="buff-pill rapid-pill" hidden></div>
     <div class="buff-pill star-pill" hidden></div>
+    <div class="buff-pill trial-pill" hidden></div>
     <div class="world-indicator"><span></span><div class="progress" hidden><i></i></div></div>
     <div class="fps">60 FPS</div>
     <section class="boss-meter" aria-label="首领生命" hidden>
@@ -84,6 +96,8 @@ function mount(root: HTMLElement): HudDom {
     arsenalFill: root.querySelector('.arsenal-bar i')!,
     rapid: root.querySelector('.rapid-pill')!,
     star: root.querySelector('.star-pill')!,
+    trial: root.querySelector('.trial-pill')!,
+    trialSig: '',
     worldText: root.querySelector('.world-indicator > span')!,
     worldSig: '',
     progressWrap: root.querySelector('.progress')!,
@@ -104,7 +118,7 @@ export function drawHUD(element: HTMLElement, status: Status) {
   const dom = cache.get(element) ?? mount(element);
   const {
     hearts, maxHearts, shield, coins, fps, boss, world, depth, modifier, heat,
-    combo, powered, progress, arsenal, arsenalLevel = 1, arsenalTime = 0, arsenalMax = 20,
+    combo, powered, progress, trial, arsenal, arsenalLevel = 1, arsenalTime = 0, arsenalMax = ARSENAL_DURATION,
     rapidTime = 0, starTime = 0,
   } = status;
 
@@ -159,6 +173,21 @@ export function drawHUD(element: HTMLElement, status: Status) {
     if (dom.star.textContent !== text) dom.star.textContent = text;
   } else {
     dom.star.hidden = true;
+  }
+
+  if (trial) {
+    dom.trial.hidden = false;
+    const sig = `${trial.kind}:${trial.progress}/${trial.target}:${trial.done ? 1 : 0}:${trial.elite ? 1 : 0}`;
+    if (dom.trialSig !== sig) {
+      dom.trialSig = sig;
+      dom.trial.classList.toggle('done', trial.done);
+      dom.trial.classList.toggle('elite', trial.elite && !trial.done);
+      dom.trial.textContent = trial.done
+        ? (trial.elite ? '⚔ 试炼完成！' : '✦ 遗物+1 已达成')
+        : `${trial.elite ? '⚔' : '✦'} ${TRIAL_META[trial.kind].label} ${trial.progress}/${trial.target}`;
+    }
+  } else {
+    dom.trial.hidden = true;
   }
 
   const mark = modifier === 'normal' ? '' : ' · ' + MODIFIERS[modifier];

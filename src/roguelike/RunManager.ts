@@ -1,14 +1,14 @@
 import { rng } from '../engine/Physics';
-import { MODIFIERS, type Modifier, type World } from '../level/LevelGenerator';
+import { ELITE_TRIALS, MODIFIERS, TRIAL_META, type Modifier, type TrialKind, type World } from '../level/LevelGenerator';
 import type { FlagGrade, StageResult } from '../level/Stage';
 import { CHARACTERS, type Character } from './Characters';
 import { countTags, relicOffer, type Relic } from './Relics';
 
 export type NodeType = 'stage' | 'elite' | 'shop' | 'event' | 'boss';
-export interface Node { kind: NodeType; name: string; detail: string; modifier: Modifier }
+export interface Node { kind: NodeType; name: string; detail: string; modifier: Modifier; trial?: TrialKind }
 export const ELITES: Modifier[] = ['low-gravity', 'double-coins', 'ice'];
-const node = (kind: NodeType, name: string, detail: string, modifier: Modifier = 'normal'): Node => ({ kind, name, detail, modifier });
-export const NORMAL = node('stage', '星辉小径', '跑跳闯关 · 终点强化');
+const node = (kind: NodeType, name: string, detail: string, modifier: Modifier = 'normal', trial?: TrialKind): Node => ({ kind, name, detail, modifier, trial });
+export const NORMAL = node('stage', '星辉小径', '跑跳闯关 · 达成关内挑战解锁第 4 遗物项');
 const BOSS = node('boss', '守关竞技场', '挑战世界守卫');
 const SHOP = node('shop', '水管商店', '遗物、红心与护盾');
 const EVENT = node('event', '神秘问号房', '接受一项奇遇');
@@ -46,6 +46,7 @@ export class RunManager {
   rerolls: number;
   freeRefresh = false;
   pendingElite?: Relic;
+  lastTrialDone = false;
   private lastResult?: StageResult;
 
   constructor(readonly seed: number, readonly options: RunOptions = {}) {
@@ -66,7 +67,8 @@ export class RunManager {
     if (this.depth >= 3) this.routes = [BOSS];
     else {
       const modifier = ELITES[Math.floor(this.random() * ELITES.length)];
-      const elite = node('elite', '精英突变关', MODIFIERS[modifier] + ' · 稀有遗物', modifier);
+      const trial = ELITE_TRIALS[Math.floor(this.random() * ELITE_TRIALS.length)];
+      const elite = node('elite', '精英突变关', `${MODIFIERS[modifier]}\n试炼：${TRIAL_META[trial].routeDesc} → 额外稀有遗物`, modifier, trial);
       this.routes = [NORMAL, elite, this.depth === 1 || this.depth > 1 && this.random() < 0.5 ? SHOP : EVENT];
     }
   }
@@ -94,18 +96,21 @@ export class RunManager {
     if (this.current.kind === 'boss') { this.bosses++; return; }
     this.clears++;
     this.grade = result.grade;
-    this.stageStars += result.grade === 'perfect' ? 15 : result.grade === 'great' ? 13 : 10;
-    this.pendingElite = this.current.kind === 'elite'
+    this.lastTrialDone = result.trialDone;
+    this.stageStars += (result.grade === 'perfect' ? 15 : result.grade === 'great' ? 13 : 10) + (result.trialDone ? 4 : 0);
+    this.pendingElite = this.current.kind === 'elite' && result.trialDone
       ? relicOffer(this.relics, 10, this.random, this.options.luck, true).find(relic => relic.rarity !== 'common')
       : undefined;
     if (this.pendingElite) this.add(this.pendingElite);
-    this.rewards = relicOffer(this.relics, this.grade === 'perfect' ? 4 : 3, this.random, this.options.luck);
+    const slots = result.trialDone ? 4 : 3;
+    this.rewards = relicOffer(this.relics, slots, this.random, this.options.luck);
   }
 
   reroll() {
     if (!this.rerolls || !this.rewards.length) return;
     this.rerolls--;
-    this.rewards = relicOffer(this.relics, this.grade === 'perfect' ? 4 : 3, this.random, this.options.luck, false, this.rewards);
+    const slots = this.lastTrialDone ? 4 : 3;
+    this.rewards = relicOffer(this.relics, slots, this.random, this.options.luck, false, this.rewards);
   }
 
   finishNode() { this.depth++; this.makeRoutes(); }
