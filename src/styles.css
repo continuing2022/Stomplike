@@ -75,6 +75,7 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
 .wallet { color: #ffe4a2; border-color: #ab826a; }
 .title-view .actions { align-items: start; gap: 9px; }
 .title-view .primary { flex-basis: min(100%, 237px); display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-right: calc(100% - min(100%, 240px)); min-height: 44px; padding-inline: 13px; }
+.title-view .primary.selected { outline-color: #79503f; outline-offset: -5px; }
 .title-view .primary .choice-title { font-size: 17px; }
 .title-view .secondary .choice-title { font-size: 13px; }
 .enter-key { background: #d8a267; border-color: #754b4c4f; color: #292139; font-size: 11px; }
@@ -82,6 +83,14 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
 .talent-view .cards { grid-template-columns: repeat(3, minmax(0,1fr)); }
 .talent-view .card { min-height: 77px; }
 .reward-view .panel { border-color: #b69285; }
+.replace-view .panel { padding: 14px 20px; gap: 10px; border-color: #e6ad79; }
+.replace-view .panel-header h1 { font-size: clamp(18px, 2.7vw, 27px); }
+.replace-view .panel-intro { margin-top: 5px; font-size: 12.5px; }
+.replace-view .cards { gap: 8px; }
+.replace-view .card { min-height: 0; padding: 8px 10px; gap: 4px; }
+.replace-view .card-icon { width: 24px; height: 24px; }
+.replace-view .choice-title { font-size: 14px; }
+.replace-view .choice-detail { font-size: 11.5px; line-height: 1.35; }
 .shop-view .panel { border-color: #b49176; }
 .event-view .panel { width: min(600px, 94%); border-color: #9e7cb6; }
 .stats-grid { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 8px; }

@@ -4,7 +4,7 @@ import type { RunSummary } from '../roguelike/RunManager';
 import { COINS, HEROES } from '../graphics/SpriteData';
 import { WORLD_NAMES } from '../level/LevelGenerator';
 import { FLAG_NAMES, type RunManager } from '../roguelike/RunManager';
-import { RARITY_NAMES, STARTER_RELICS, TAGS, type Relic, type Tag } from '../roguelike/Relics';
+import { countTags, MAX_RELICS, MAX_SHIELD, MAX_TEMPER, RARITY_NAMES, STARTER_RELICS, TAGS, TEMPER_BONUS, type Relic, type Tag } from '../roguelike/Relics';
 import type { PixelRenderer, Sprite } from '../graphics/PixelRenderer';
 
 export interface Choice {
@@ -143,6 +143,16 @@ export class Overlays {
   tags(run: RunManager) {
     const row = document.createElement('div');
     row.className = 'tag-row';
+    const slotBadge = this.line('span', 'tag' + (run.isFull ? ' active' : ''), `背包 ${run.relics.length}/${MAX_RELICS}`);
+    slotBadge.style.setProperty('--card-accent', '#ffd580');
+    slotBadge.title = `最多同时装备 ${MAX_RELICS} 件遗物；满槽获取新遗物时可替换熔炼旧遗物`;
+    row.append(slotBadge);
+    if (run.temper > 0 || run.isFull) {
+      const temperBadge = this.line('span', 'tag active', `淬炼 ★${run.temper}/${MAX_TEMPER} (+${Math.round(run.temper * TEMPER_BONUS * 100)}%)`);
+      temperBadge.style.setProperty('--card-accent', '#ff9f8a');
+      temperBadge.title = `每次熔炼遗物提升 1 星淬炼（最高 ${MAX_TEMPER} 星 +${Math.round(MAX_TEMPER * TEMPER_BONUS * 100)}% 伤害）`;
+      row.append(temperBadge);
+    }
     const counts = run.tags;
     for (const tag of Object.keys(TAGS) as Tag[]) {
       const t = TAGS[tag];
@@ -164,8 +174,8 @@ export class Overlays {
     });
   }
 
-  rewards(run: RunManager, choose: (relic?: Relic) => void, reroll: () => void) {
-    const intro = !run.rewards.length
+  rewards(run: RunManager, choose: (relic?: Relic) => void, reroll: () => void, salvage: () => void) {
+    const baseIntro = !run.rewards.length
       ? '符合条件的遗物已全部收集'
       : run.current.kind === 'elite'
         ? (run.pendingElite
@@ -174,15 +184,63 @@ export class Overlays {
         : (run.lastTrialDone
           ? '✦ 挑战达成！已解锁第 4 个遗物选项'
           : '选择一件遗物（达成关内挑战可解锁第 4 选项）');
+    const intro = run.rewards.length && run.isFull ? baseIntro + ' · 背包已满，选牌后替换熔炼旧遗物' : baseIntro;
+    const smelt = run.smeltPreview('common');
+    const actions: Choice[] = run.rewards.length
+      ? [
+          ...(run.rerolls ? [{ title: '刷新 · ' + run.rerolls + ' 次', select: reroll }] : []),
+          { title: `放弃并熔炼 (+${smelt.coins}G${smelt.canTemper ? ' · 淬炼+1' : ''})`, select: salvage },
+        ]
+      : [{ title: '继续', select: () => choose() }];
     this.show({
       style: 'reward-view', eyebrow: WORLD_NAMES[run.world] + ' / 强化',
       title: FLAG_NAMES[run.grade],
       intro,
       details: this.tags(run),
       choices: run.rewards.map(relic => this.relic(relic, run, () => choose(relic))),
-      actions: run.rewards.length
-        ? (run.rerolls ? [{ title: '刷新 · ' + run.rerolls + ' 次', select: reroll }] : [])
-        : [{ title: '继续', select: () => choose() }],
+      actions,
+    });
+  }
+
+  replaceRelic(
+    run: RunManager,
+    incoming: Relic,
+    eyebrow: string,
+    replaceWith: (oldRelic: Relic) => void,
+    fallback: Choice,
+    cost?: number,
+  ) {
+    const inTags = incoming.tags.map(t => TAGS[t].name).join(' / ');
+    const costNote = cost !== undefined ? ` · 花费 ${cost} 金币` : '';
+    const choices: Choice[] = run.relics.map(oldRelic => {
+      const preview = run.smeltPreview(oldRelic.rarity);
+      const nextCounts = countTags(run.relics.map(r => (r === oldRelic ? incoming : r)));
+      const deltaNotes: string[] = [];
+      for (const tag of Object.keys(TAGS) as Tag[]) {
+        const prev = run.tags[tag];
+        const next = nextCounts[tag];
+        if (next > prev && (next === 2 || next === 4)) deltaNotes.push(`激活 ${TAGS[tag].name} ${next}`);
+        if (next < prev && ((prev >= 4 && next < 4) || (prev >= 2 && next < 2))) {
+          deltaNotes.push(`失去 ${TAGS[tag].name} ${prev >= 4 ? 4 : 2}`);
+        }
+      }
+      return {
+        title: oldRelic.name,
+        detail: oldRelic.description + (deltaNotes.length ? '\n' + deltaNotes.join(' · ') : ''),
+        label: `熔炼 +${preview.coins}G${preview.canTemper ? ' · 淬炼+1' : ''} · ${RARITY_NAMES[oldRelic.rarity]}`,
+        accent: TAGS[oldRelic.tags[0]].color,
+        icon: oldRelic.iconMatrix,
+        select: () => replaceWith(oldRelic),
+      };
+    });
+    this.show({
+      style: 'reward-view replace-view',
+      eyebrow,
+      title: `换入「${incoming.name}」`,
+      intro: `${RARITY_NAMES[incoming.rarity]} · ${inTags}${costNote} — ${incoming.description}`,
+      details: this.tags(run),
+      choices,
+      actions: [fallback],
     });
   }
 
@@ -199,15 +257,21 @@ export class Overlays {
     });
   }
 
-  shop(run: RunManager, change: () => void, leave: () => void) {
+  shop(run: RunManager, buyRelic: (relic: Relic) => void, change: () => void, leave: () => void) {
+    const shieldTitle = run.shield >= MAX_SHIELD
+      ? `护盾已满 (${MAX_SHIELD}/${MAX_SHIELD})`
+      : run.shopShieldBought
+        ? '护盾 · 本店限购 1'
+        : '护盾 · ' + run.shieldPrice();
     this.show({
       style: 'shop-view', eyebrow: WORLD_NAMES[run.world] + ' / ' + run.coins + ' 金币',
       title: '水管商店',
-      choices: run.stock.map(relic => this.relic(relic, run, () => { run.buy(relic); change(); }, run.relicPrice(relic))),
+      details: this.tags(run),
+      choices: run.stock.map(relic => this.relic(relic, run, () => buyRelic(relic), run.relicPrice(relic))),
       actions: [
         { title: '离开商店', select: leave },
         { title: '红心 · ' + run.price(24), disabled: run.coins < run.price(24) || run.hearts >= run.maxHearts, select: () => { if (run.spend(run.price(24))) run.hearts++; change(); } },
-        { title: '护盾 · ' + run.price(30), disabled: run.coins < run.price(30), select: () => { if (run.spend(run.price(30))) run.shield++; change(); } },
+        { title: shieldTitle, disabled: !run.canBuyShield(), select: () => { if (run.buyShield()) change(); } },
         { title: '刷新 · ' + (run.freeRefresh ? '免费' : run.price(16)), disabled: !run.freeRefresh && run.coins < run.price(16), select: () => { run.refreshShop(); change(); } },
       ],
     });
@@ -217,7 +281,7 @@ export class Overlays {
     const event = {
       gambler: { title: '赌徒问号块', detail: '交出 1 颗红心，换取一件随机传说遗物。', action: '接受赌约', disabled: run.hearts < 2 },
       fountain: { title: '黄金喷泉', detail: '在 10 秒内尽可能拾取金币。', action: '开启喷泉', disabled: false },
-      smith: { title: '炼金铁匠', detail: '支付 ' + run.price(28) + ' 金币，请铁匠制作稀有遗物或护盾。', action: '支付铁匠', disabled: run.coins < run.price(28) },
+      smith: { title: '炼金铁匠', detail: '支付 ' + run.price(28) + ' 金币，请铁匠打造稀有遗物（若无则补盾或淬炼）。', action: '支付铁匠', disabled: !run.canAcceptSmith() },
     }[run.event];
     this.show({
       style: 'event-view', eyebrow: '神秘问号房', title: event.title, intro: result || event.detail,

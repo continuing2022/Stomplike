@@ -49,10 +49,13 @@ export class Enemy implements Body {
   private homeX: number;
   private homeY: number;
 
-  constructor(public kind: EnemyKind, public x: number, public y: number, public face: number, strength = 0) {
+  constructor(public kind: EnemyKind, public x: number, public y: number, public face: number, strength = 0, world = 0, depth = 0, eliteBoost = 0) {
     this.homeX = x;
     this.homeY = y;
-    this.hp = 1 + strength * 0.19 + (kind === 'guard' ? 0.75 : 0);
+    const worldHp = world === 0 ? 0 : world === 1 ? 0.45 + Math.min(2, depth) * 0.1 : 0.8 + Math.min(2, depth) * 0.1;
+    const roleHp = kind === 'guard' ? (world === 0 ? 0.75 : 0.95 + world * 0.15)
+      : (kind === 'mage' || kind === 'miner') ? 0.25 + world * 0.1 : 0;
+    this.hp = Number(((1 + worldHp + roleHp + eliteBoost) * (1 + strength * 0.16)).toFixed(2));
     if (kind === 'plant') { this.w = 23; this.h = 23; }
     if (kind === 'cannonball') { this.h = 18; this.vx = face * 155; }
   }

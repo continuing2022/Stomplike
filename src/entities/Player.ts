@@ -42,6 +42,7 @@ export class Player implements Body {
   arsenalLevel: 1 | 2 = 1;
   arsenalTime = 0;
   arsenalMax = ARSENAL_DURATION;
+  arsenalExtended = 0;
   rapidTime = 0;
   orbitAngle = 0;
   mayPound = false;
@@ -76,6 +77,13 @@ export class Player implements Body {
     this.powered = active;
   }
 
+  extendArsenal(seconds: number) {
+    if (this.arsenalTime <= 0 || this.arsenalExtended >= 8) return;
+    const grant = Math.min(seconds, 8 - this.arsenalExtended);
+    this.arsenalExtended += grant;
+    this.arsenalTime = Math.min(this.arsenalMax, this.arsenalTime + grant);
+  }
+
   orbitPositions(): Array<{ x: number; y: number }> {
     if (this.arsenal !== 'F' || this.arsenalTime <= 0 || this.recover > 0) return [];
     const count = this.arsenalLevel === 2 ? 3 : 2;
@@ -97,7 +105,7 @@ export class Player implements Body {
     this.rapidTime = Math.max(0, this.rapidTime - dt);
     if (this.arsenalTime > 0) {
       this.arsenalTime = Math.max(0, this.arsenalTime - dt);
-      if (!this.arsenalTime) { this.arsenal = undefined; this.arsenalLevel = 1; }
+      if (!this.arsenalTime) { this.arsenal = undefined; this.arsenalLevel = 1; this.arsenalExtended = 0; }
     }
     this.orbitAngle += dt * (this.arsenalLevel === 2 ? 6.2 : 5.0);
     if (this.recover > 0) {

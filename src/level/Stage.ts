@@ -12,7 +12,7 @@ import { drawBackground } from '../graphics/Background';
 import { ParticleSystem } from '../graphics/ParticleSystem';
 import type { PixelRenderer } from '../graphics/PixelRenderer';
 import { CASTLE, COINS, CRYSTAL, FLAG, STAR } from '../graphics/SpriteData';
-import { countTags, pickPreferredTag, type Effect } from '../roguelike/Relics';
+import { countTags, MAX_SHIELD, pickPreferredTag, TEMPER_BONUS, type Effect } from '../roguelike/Relics';
 import type { RunManager } from '../roguelike/RunManager';
 import { TRIAL_META, type Level, type Modifier, type TrialKind } from './LevelGenerator';
 import { Tile, TileMap } from './TileMap';
@@ -117,12 +117,14 @@ export class Stage {
     };
     this.player.hearts = run.hearts;
     this.player.maxHearts = run.maxHearts;
-    this.player.shield = run.shield;
+    this.player.shield = Math.min(MAX_SHIELD, run.shield);
     this.player.mayPound = this.effects.has('pound');
     for (const coin of level.coins) this.pickup(coin.x, coin.y, 'coin', 2);
     for (const crest of level.crests) this.pickup(crest.x, crest.y, 'crest', 8);
-    const eliteBoost = run.current.kind === 'elite' ? (this.modifier === 'double-coins' ? 2.2 : 1.4) : 0;
-    for (const spawn of level.enemies) this.enemies.push(new Enemy(spawn.kind, spawn.x, spawn.y, spawn.direction, run.heat + eliteBoost));
+    const eliteBoost = run.current.kind === 'elite' ? (this.modifier === 'double-coins' ? 0.65 : 0.35) : 0;
+    for (const spawn of level.enemies) {
+      this.enemies.push(new Enemy(spawn.kind, spawn.x, spawn.y, spawn.direction, run.heat, this.world, run.depth, eliteBoost));
+    }
     this.flagY = level.flag.top + 6;
     this.playerEvents = {
       jump: () => { this.particles.dust(this.player.center, this.player.feet); this.feedback.audio.play('jump'); },
@@ -150,11 +152,11 @@ export class Stage {
     }
   }
 
-  private triggerBlockSynergy(x: number, y: number) {
+  private triggerBlockSynergy(x: number, y: number, direct = true) {
     if (this.tags.block >= 2) {
       for (let i = 0; i < 4; i++) this.projectiles.push(new Projectile('shard', x, y - 20, (i - 1.5) * 120, -195 - i % 2 * 65, 1.15));
     }
-    if (this.has('charge') && ++this.charges % 5 === 0) {
+    if (direct && this.player.star <= 0 && this.has('charge') && ++this.charges % 5 === 0) {
       this.player.star = Math.max(this.player.star, 3);
       this.feedback.audio.play('powerup');
       this.particles.text(x, y - 24, 'STAR!');
@@ -207,8 +209,8 @@ export class Stage {
     this.particles.burst(emblem.center, emblem.y + 10, 22, [meta.color, meta.core, '#ffffff'], 135, 45, true);
     if (emblem.kind === 'B') {
       const overcharge = p.shield > 0 || p.star > 0;
-      p.star = Math.max(p.star, 8);
-      p.shield = Math.min(6, p.shield + 1);
+      p.star = Math.max(p.star, 4.5);
+      p.shield = Math.min(MAX_SHIELD, p.shield + 1);
       if (overcharge) {
         for (const shot of this.projectiles) if (shot.hostile) shot.life = 0;
         this.shock(p.center, p.y + 12, this.damage(1.2));
@@ -221,6 +223,7 @@ export class Stage {
       if (p.arsenal && p.arsenalTime > 0) {
         p.arsenalLevel = 2;
         p.arsenalTime = p.arsenalMax;
+        p.arsenalExtended = 0;
         this.particles.text(p.center, p.y - 14, p.arsenal + ' OVERDRIVE!', meta.color);
       } else {
         this.particles.text(p.center, p.y - 14, meta.callout, meta.color);
@@ -232,10 +235,11 @@ export class Stage {
     p.arsenalLevel = upgrade ? 2 : 1;
     p.arsenalMax = ARSENAL_DURATION;
     p.arsenalTime = ARSENAL_DURATION;
+    p.arsenalExtended = 0;
     this.particles.text(p.center, p.y - 14, upgrade ? emblem.kind + ' MAX!' : meta.callout, meta.color);
   }
 
-  private hitBlock(tile: Tile, force = false) {
+  private hitBlock(tile: Tile, force = false, direct = !force) {
     if (tile.kind === 'switch' && tile.bump <= 0 && this.boss) {
       tile.bump = 0.2;
       if (this.world === 1) this.boss.expose();
@@ -268,10 +272,10 @@ export class Stage {
         else this.fire('fire', x, y - 22, this.player.face);
       }
     }
-    if (this.tags.block >= 1 && this.player.arsenalTime > 0) {
-      this.player.arsenalTime = Math.min(this.player.arsenalMax, this.player.arsenalTime + 1);
+    if (direct && this.tags.block >= 1) {
+      this.player.extendArsenal(1);
     }
-    this.triggerBlockSynergy(x, y - 8);
+    this.triggerBlockSynergy(x, y - 8, direct);
     if (!broken) { this.feedback.audio.play('blockBump'); return; }
     this.map.remove(tile);
     if (steel && kind === 'brick') this.sprayCoins(x, y - 8, 2, 1);
@@ -287,7 +291,7 @@ export class Stage {
       for (const enemy of this.enemies) if (enemy.alive && Math.hypot(enemy.center - x, enemy.y - y) < radius) this.defeat(enemy);
       if (!force && this.has('blast')) {
         const adjacent = this.map.candidates({ x: tile.x - TILE + 2, y: tile.y - TILE + 2, w: TILE * 3 - 4, h: TILE * 3 - 4 });
-        for (const other of adjacent) if (other !== tile && other.kind === 'brick') this.hitBlock(other, true);
+        for (const other of adjacent) if (other !== tile && other.kind === 'brick') this.hitBlock(other, true, false);
       }
     }
     this.feedback.audio.play('blockBreak');
@@ -303,17 +307,24 @@ export class Stage {
     if (this.has('midas')) {
       this.coinChain = this.time - this.lastCoin < 0.8 ? this.coinChain + 1 : 1;
       this.lastCoin = this.time;
-      value = Math.round(value * Math.min(3, 1 + (this.coinChain - 1) * 0.23));
+      value = Math.round(value * Math.min(2, 1 + (this.coinChain - 1) * 0.2));
     }
     this.coins += value;
     this.balance += value;
     this.run.coinTowardsLife += value;
-    while (this.run.coinTowardsLife >= 100) {
-      this.run.coinTowardsLife -= 100;
-      if (this.player.hearts < this.player.maxHearts) this.player.hearts++;
-      else this.player.shield++;
+    while (this.run.coinTowardsLife >= 135) {
+      this.run.coinTowardsLife -= 135;
+      if (this.player.hearts < this.player.maxHearts) {
+        this.player.hearts++;
+        this.particles.text(this.player.center, this.player.y - 10, '1UP!', '#a8f1bd');
+      } else if (this.player.shield < MAX_SHIELD) {
+        this.player.shield++;
+        this.particles.text(this.player.center, this.player.y - 10, '+1 SHIELD', '#8ceaff');
+      } else {
+        this.player.speedBoost = Math.max(this.player.speedBoost, 3.5);
+        this.particles.text(this.player.center, this.player.y - 10, 'BOOST!', '#ffe66d');
+      }
       this.feedback.audio.play('powerup');
-      this.particles.text(this.player.center, this.player.y - 10, '1UP!', '#a8f1bd');
     }
     if (this.tags.greed >= 2) this.player.coinBoost = 4;
     if (this.tags.greed >= 4 && this.random() < 0.15) {
@@ -335,7 +346,10 @@ export class Stage {
   }
 
   private damage(base: number, expensive = false) {
-    let value = base * (1 + (this.run.character.id === 'buck' ? Math.floor(this.balance / 50) * 0.1 : 0)) * (this.has('crown') ? 1 + Math.floor(this.balance / 100) * 0.25 : 1);
+    const buckBonus = this.run.character.id === 'buck' ? Math.min(0.6, Math.floor(this.balance / 50) * 0.1) : 0;
+    const crownBonus = this.has('crown') ? Math.min(1, Math.floor(this.balance / 100) * 0.25) : 0;
+    const temperBonus = this.run.temper * TEMPER_BONUS;
+    let value = base * (1 + buckBonus + crownBonus + temperBonus);
     if (expensive && this.has('heavy')) {
       if (this.heavyBoost > 0) value *= 1.6;
       else if (this.balance >= 3) {
@@ -500,7 +514,7 @@ export class Stage {
     this.particles.dust(p.center, p.feet, pound);
     if (pound) {
       const tiles = this.map.candidates({ x: p.x - 20, y: p.feet, w: p.w + 40, h: 5 });
-      for (const tile of tiles) this.hitBlock(tile, true);
+      for (const tile of tiles) this.hitBlock(tile, true, true);
       this.shock(p.center, p.feet - 21, this.damage(1.7));
       if (this.has('lava')) this.lava(p.center, p.feet - 20);
       if (this.has('portable')) this.temporaryBrick(true);
@@ -513,8 +527,8 @@ export class Stage {
     const p = this.player;
     this.advanceTrial('combo3', this.bestCombo, true);
     if (p.combo === 3 || p.combo === 4) this.advanceTrial('combo4', 1);
-    if (this.tags.stomp >= 1 && p.arsenalTime > 0) {
-      p.arsenalTime = Math.min(p.arsenalMax, p.arsenalTime + 1.5);
+    if (this.tags.stomp >= 1) {
+      p.extendArsenal(1.5);
     }
     if (this.has('thunder')) {
       const enemies = this.nearby(x, y, 220).filter(e => Math.abs(e.center - x) > 10).slice(0, 2);
@@ -530,9 +544,9 @@ export class Stage {
       if (!this.map.colliders({ ...e, x: e.x + offset }).some(tile => overlaps({ ...e, x: e.x + offset }, tile))) e.x += offset;
     }
     if (this.has('insoles')) p.speedBoost = 3;
-    if (this.has('siphon') && p.combo % 3 === 0 && this.siphons < 2) {
+    if (this.has('siphon') && p.combo % 3 === 0 && this.siphons < 2 && p.shield < MAX_SHIELD) {
       this.siphons++;
-      p.shield++;
+      p.shield = Math.min(MAX_SHIELD, p.shield + 1);
       this.particles.text(p.center, p.y - 14, '+1 SHIELD', '#8ceaff');
     }
     if (this.tags.stomp >= 4 && p.combo % 3 === 0) {
@@ -557,7 +571,7 @@ export class Stage {
       this.talismans++;
       this.balance -= 40;
       p.invulnerable = 1.5;
-      this.sprayCoins(p.center, p.y, 8, 3);
+      this.sprayCoins(p.center, p.y, 5, 2);
       this.feedback.audio.play('coin');
       return;
     }
@@ -629,6 +643,7 @@ export class Stage {
       for (const shot of this.projectiles) {
         if (shot.hostile && shot.life > 0 && shot.type !== 'rock' && overlaps(box, shot)) {
           shot.life = 0;
+          this.player.arsenalTime = Math.max(0.25, this.player.arsenalTime - 0.5);
           this.particles.burst(shot.x, shot.y, 6, ['#ff924c', '#fff3b0']);
         }
       }
@@ -712,7 +727,7 @@ export class Stage {
     for (const shot of this.projectiles) {
       shot.tick(dt, this.map);
       if (!shot.hostile && this.tags.block >= 1 && (shot.type === 'laser' || shot.type === 'flame')) {
-        for (const tile of this.map.candidates(shot)) if (overlaps(shot, tile)) this.hitBlock(tile);
+        for (const tile of this.map.candidates(shot)) if (overlaps(shot, tile)) this.hitBlock(tile, false, false);
       }
       if (shot.life <= 0 || shot.type === 'lightning') continue;
       if (!shot.hostile && this.boss && this.boss.world === 0 && shot.type === 'rock' && this.boss.vulnerable && overlaps(shot, this.boss)) {
@@ -734,7 +749,8 @@ export class Stage {
       if (shot.life <= 0) continue;
 
       if (this.boss && this.boss.vulnerable && !shot.hit.has(this.boss) && overlaps(shot, this.boss)) {
-        if (this.hitBoss(shot.damage * 0.75, shot.x, shot.y)) {
+        const bossMul = this.boss.world === 2 && this.boss.mode !== 'exposed' ? 0.55 : 0.75;
+        if (this.hitBoss(shot.damage * bossMul, shot.x, shot.y)) {
           shot.hit.add(this.boss);
           if (shot.splash > 0) this.splashDamage(shot.x, shot.y, shot.splash, shot.damage * 0.45);
           if (!shot.pierce) { shot.life = 0; continue; }
@@ -790,7 +806,7 @@ export class Stage {
   private enemyTick(dt: number) {
     const p = this.player;
     const modSpeed = this.modifier === 'double-coins' ? 1.38 : this.modifier === 'low-gravity' ? 1.2 : 1;
-    const speed = modSpeed * (1 + this.run.heat * 0.07);
+    const speed = modSpeed * (1 + this.world * 0.06 + this.run.heat * 0.08);
     for (const enemy of this.enemies) {
       if (enemy.state !== 'rolling' && Math.abs(enemy.center - p.center) > WIDTH * 1.15) continue;
       if (enemy.homing && enemy.state === 'rolling') {
@@ -810,13 +826,15 @@ export class Stage {
         if (enemy.homing && enemy.bounces >= 6) { enemy.state = 'gone'; continue; }
         if (enemy.flaming || this.has('wrecking')) {
           const contact = { x: enemy.x - 5, y: enemy.y + 2, w: enemy.w + 10, h: enemy.h - 3 };
-          for (const tile of this.map.candidates(contact)) if (overlaps(contact, tile)) this.hitBlock(tile, true);
+          for (const tile of this.map.candidates(contact)) if (overlaps(contact, tile)) this.hitBlock(tile, true, false);
         }
         for (const target of this.enemies) {
           if (target !== enemy && target.alive && target.visible && target.state !== 'rolling' && overlaps(enemy, target)) {
             this.splitShell(enemy);
-            if (this.tags.projectile >= 4 && !enemy.flaming) {
-              const hits = 1.45 * (1 + Math.min(2, enemy.shellKills) * 0.2);
+            if (!enemy.flaming) {
+              const hits = this.tags.projectile >= 4
+                ? 2.2 * (1 + Math.min(4, enemy.shellKills) * 0.35)
+                : 2.0;
               if (hits < target.hp) this.hitEnemy(target, hits);
               else this.defeat(target, ++enemy.shellKills);
             } else this.defeat(target, ++enemy.shellKills);
@@ -867,8 +885,10 @@ export class Stage {
 
   private hitBoss(damage: number, x: number, y: number) {
     const boss = this.boss;
-    if (!boss || !boss.hit(damage)) return false;
-    this.particles.text(x, y - 10, '−' + Number(damage.toFixed(1)));
+    if (!boss) return false;
+    const dealt = boss.hit(damage);
+    if (!dealt) return false;
+    this.particles.text(x, y - 10, '−' + Number(dealt.toFixed(1)));
     this.particles.burst(x, y, 14, GOLD, 135, 130, true);
     this.feedback.freeze(0.045);
     this.camera.shake(6);
@@ -1026,15 +1046,13 @@ export class Stage {
           const alreadyPowered = this.player.powered;
           this.player.setPower(true, this.map);
           if (alreadyPowered) {
-            if (this.player.shield < 4) {
+            if (this.player.shield < MAX_SHIELD) {
               this.player.shield++;
               this.particles.text(this.player.center, this.player.y - 12, '+1 SHIELD', '#8ceaff');
             } else {
               this.collect(item.x + 8, item.y, 12);
             }
-            if (this.player.arsenalTime > 0) {
-              this.player.arsenalTime = Math.min(this.player.arsenalMax, this.player.arsenalTime + 4);
-            }
+            this.player.extendArsenal(3);
           } else {
             this.particles.text(this.player.center, this.player.y - 12, 'POWER UP!', '#ffad9b');
           }

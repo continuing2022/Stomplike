@@ -6,15 +6,16 @@ import { PixelRenderer } from './graphics/PixelRenderer';
 import { BRICK, COINS, CRYSTAL, GROUND, HEROES, QUESTION, SOIL, STAR } from './graphics/SpriteData';
 import { drawShop, drawTitle } from './graphics/TitleScene';
 import { ARSENAL_DURATION, POD_PRELOAD_SPRITES } from './entities/SupplyPod';
-import { generateArena, generateLevel, TRIAL_META } from './level/LevelGenerator';
+import { generateArena, generateLevel, TRIAL_META, WORLD_NAMES } from './level/LevelGenerator';
 import { Stage } from './level/Stage';
 import { CHARACTERS } from './roguelike/Characters';
 import { MetaProgression } from './roguelike/MetaProgression';
+import { MAX_SHIELD } from './roguelike/Relics';
 import { NORMAL, RunManager, type Node } from './roguelike/RunManager';
 import { drawHUD } from './ui/HUD';
 import { Overlays } from './ui/Overlays';
 
-type Screen = 'title' | 'starter' | 'characters' | 'talents' | 'heat' | 'confirm' | 'play' | 'pause' | 'routes' | 'shop' | 'event' | 'fountain' | 'rewards' | 'settlement';
+type Screen = 'title' | 'starter' | 'characters' | 'talents' | 'heat' | 'confirm' | 'play' | 'pause' | 'routes' | 'shop' | 'event' | 'fountain' | 'rewards' | 'replace' | 'settlement';
 
 class Game {
   private readonly ctx = document.querySelector<HTMLCanvasElement>('#game')!.getContext('2d')!;
@@ -31,6 +32,7 @@ class Game {
   private screen: Screen = 'title';
   private titleTime = 0;
   private fountain = { remaining: 0, total: 0, slot: 0 };
+  private cancelReplace?: () => void;
   private readonly touch = document.querySelector<HTMLElement>('#touch')!;
 
   constructor() {
@@ -61,6 +63,11 @@ class Game {
     this.audio.unlock();
     if (event.code === 'KeyM' && !event.repeat) { this.toggleSound(); return; }
     if (event.target === this.sound && (event.code === 'Enter' || (event.code === 'Space' && this.screen !== 'play'))) return;
+    if (event.code === 'Escape' && !event.repeat && this.screen === 'replace' && this.cancelReplace) {
+      event.preventDefault();
+      this.cancelReplace();
+      return;
+    }
     if (event.code === 'Escape' && !event.repeat && ['starter', 'characters', 'talents', 'heat', 'confirm'].includes(this.screen)) {
       event.preventDefault();
       if (this.screen === 'confirm') this.talents();
@@ -234,17 +241,76 @@ class Game {
 
   private shop() {
     this.screen = 'shop';
-    this.menus.shop(this.run, () => { this.audio.play('uiSelect'); this.shop(); }, () => this.advance());
+    this.cancelReplace = undefined;
+    this.menus.shop(
+      this.run,
+      relic => {
+        const cost = this.run.relicPrice(relic);
+        if (this.run.coins < cost) return;
+        if (!this.run.isFull) {
+          if (this.run.buy(relic)) this.audio.play('uiSelect');
+          this.shop();
+          return;
+        }
+        this.screen = 'replace';
+        this.cancelReplace = () => this.shop();
+        this.menus.replaceRelic(
+          this.run,
+          relic,
+          WORLD_NAMES[this.run.world] + ' / 水管商店 · 背包已满',
+          oldRelic => {
+            if (this.run.buyWithReplace(oldRelic, relic)) this.audio.play('powerup');
+            this.shop();
+          },
+          { title: '取消购买', select: () => this.shop() },
+          cost,
+        );
+      },
+      () => { this.audio.play('uiSelect'); this.shop(); },
+      () => this.advance(),
+    );
   }
 
   private event(result = '') {
     this.screen = 'event';
+    this.cancelReplace = undefined;
     this.menus.event(this.run, () => this.advance(), () => {
       if (this.run.event === 'fountain') {
         this.screen = 'fountain';
         this.fountain = { remaining: 10, total: 0, slot: Math.floor(this.run.random() * 6) };
         this.showFountain();
-      } else this.event(this.run.resolveEvent() || '问号块安静了下来。');
+        return;
+      }
+      const message = this.run.resolveEvent();
+      const pending = this.run.pendingEventRelic;
+      if (pending) {
+        const preview = this.run.smeltPreview(pending.rarity);
+        this.screen = 'replace';
+        this.cancelReplace = undefined;
+        this.menus.replaceRelic(
+          this.run,
+          pending,
+          '神秘问号房 / 背包已满 · 替换熔炼',
+          oldRelic => {
+            const smelt = this.run.replace(oldRelic, pending);
+            this.run.pendingEventRelic = undefined;
+            this.audio.play('powerup');
+            const extra = smelt ? `（熔炼「${oldRelic.name}」+${smelt.coins}G${smelt.tempered ? ' · 淬炼+1' : ''}）` : '';
+            this.event(`换入「${pending.name}」${extra}。`);
+          },
+          {
+            title: `直接熔炼「${pending.name}」(+${preview.coins}G${preview.canTemper ? ' · 淬炼+1' : ''})`,
+            select: () => {
+              const smelt = this.run.smelt(pending.rarity);
+              this.run.pendingEventRelic = undefined;
+              this.audio.play('coin');
+              this.event(`已熔炼「${pending.name}」，获得 ${smelt.coins} 金币${smelt.tempered ? '与 1 星淬炼' : ''}。`);
+            },
+          },
+        );
+        return;
+      }
+      this.event(message || '问号块安静了下来。');
     }, result);
   }
 
@@ -269,24 +335,84 @@ class Game {
   }
 
   private rewards() {
-    this.screen = 'rewards';
     this.audio.setTrack('quiet');
-    this.menus.rewards(this.run, relic => {
-      if (relic) this.run.add(relic);
-      this.audio.play('uiSelect');
-      this.advance();
-    }, () => {
-      this.run.reroll();
-      this.audio.play('uiSelect');
-      this.rewards();
-    });
+    if (this.run.pendingElite && this.run.pendingEliteOverflow) {
+      const eliteRelic = this.run.pendingElite;
+      const preview = this.run.smeltPreview(eliteRelic.rarity);
+      this.screen = 'replace';
+      this.cancelReplace = undefined;
+      this.menus.replaceRelic(
+        this.run,
+        eliteRelic,
+        WORLD_NAMES[this.run.world] + ' / ⚔ 精英试炼遗物 · 背包已满',
+        oldRelic => {
+          this.run.replace(oldRelic, eliteRelic);
+          this.run.pendingEliteOverflow = false;
+          this.audio.play('powerup');
+          this.rewards();
+        },
+        {
+          title: `直接熔炼「${eliteRelic.name}」(+${preview.coins}G${preview.canTemper ? ' · 淬炼+1' : ''})`,
+          select: () => {
+            this.run.smelt(eliteRelic.rarity);
+            this.run.pendingElite = undefined;
+            this.run.pendingEliteOverflow = false;
+            this.audio.play('coin');
+            this.rewards();
+          },
+        },
+      );
+      return;
+    }
+    this.screen = 'rewards';
+    this.cancelReplace = undefined;
+    this.menus.rewards(
+      this.run,
+      relic => {
+        if (!relic) {
+          this.audio.play('uiSelect');
+          this.advance();
+          return;
+        }
+        if (!this.run.isFull) {
+          this.run.add(relic);
+          this.audio.play('uiSelect');
+          this.advance();
+          return;
+        }
+        this.screen = 'replace';
+        this.cancelReplace = () => this.rewards();
+        this.menus.replaceRelic(
+          this.run,
+          relic,
+          WORLD_NAMES[this.run.world] + ' / 背包已满 · 选择替换熔炼的旧遗物',
+          oldRelic => {
+            this.run.replace(oldRelic, relic);
+            this.cancelReplace = undefined;
+            this.audio.play('powerup');
+            this.advance();
+          },
+          { title: '返回重选', select: () => this.rewards() },
+        );
+      },
+      () => {
+        this.run.reroll();
+        this.audio.play('uiSelect');
+        this.rewards();
+      },
+      () => {
+        this.run.salvageReward();
+        this.audio.play('coin');
+        this.advance();
+      },
+    );
   }
 
   private sync(cleared: boolean) {
     const stage = this.stage;
     if (!stage) return;
     this.run.hearts = stage.player.hearts;
-    this.run.shield = stage.player.shield;
+    this.run.shield = Math.min(MAX_SHIELD, stage.player.shield);
     this.run.coins = stage.balance;
     this.run.record(stage.result, cleared);
   }
@@ -335,10 +461,11 @@ class Game {
       drawTitle(this.ctx, this.renderer, this.titleTime, this.meta.selected.skin);
       return;
     }
-    if (this.screen === 'shop') drawShop(this.ctx, this.renderer, this.titleTime += dt);
-    else stage.draw(this.ctx, this.renderer);
+    if (this.screen === 'shop' || (this.screen === 'replace' && this.run.current.kind === 'shop')) {
+      drawShop(this.ctx, this.renderer, this.titleTime += dt);
+    } else stage.draw(this.ctx, this.renderer);
     const p = stage.player;
-    const inStage = this.screen === 'play' || this.screen === 'pause' || this.screen === 'rewards';
+    const inStage = this.screen === 'play' || this.screen === 'pause';
     drawHUD(this.hud, {
       hearts: inStage ? p.hearts : this.run.hearts, maxHearts: this.run.maxHearts,
       shield: inStage ? p.shield : this.run.shield, coins: inStage ? stage.balance : this.run.coins,

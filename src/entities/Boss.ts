@@ -9,7 +9,8 @@ import type { ProjectileType } from './Projectile';
 
 const groundY = TILE * 13;
 const names = ['巨型蘑菇王·波波', '发条巨龟·铁甲号', '星辉暴君·库洛斯'];
-const hp = [7, 8, 10];
+const hp = [11, 18, 28];
+const heatHp = [2.5, 3.5, 5];
 
 const mushroom = pixels(
   '........................ ........ddddddd......... .....dddrrrrrrrddd...... ...ddrrrroorrrrrrrdd.... ..drrrrroooorrrrrrrrd... .drrrooorrroowoorrrrd.. .drrooorrwoooorrrrrrrd. drrroorrrrooorrrroorrrd drrrrrrrrrrrrrroooorrrd drrrrrrrrrrrrrrrrrrrrrd .ddddrrrrrrrrrrrrddddd. ..dsddddddddddddddssd.. ....dsffffsfffffsd...... ....dffwdsfsdwfffd...... ...dsffddsfsddfffsd..... ...dsffffssffffffsd..... ..ddsffddddddfffsddd.... ..dsdffdwffwdffdsdsd.... ..dsdfffddddfffdsdsd.... ...ddddsffffsdddddd..... .....dgddddddddgd....... ....dggggd..dggggd...... ...ddddddd..ddddddd.....',
@@ -53,7 +54,7 @@ export class Boss implements Body {
 
   constructor(readonly world: World, heat: number) {
     this.name = names[world];
-    this.maxHp = this.hp = hp[world] + heat;
+    this.maxHp = this.hp = hp[world] + heat * heatHp[world];
     this.w = world === 2 ? 94 : 92;
     this.h = world === 0 ? 77 : world === 1 ? 56 : 80;
     this.y = groundY - this.h;
@@ -76,13 +77,20 @@ export class Boss implements Body {
     this.vx = 0;
   }
 
+  capDamage(damage: number) {
+    const knee = this.maxHp * (this.world === 0 ? 0.18 : this.world === 1 ? 0.16 : 0.14);
+    const hardCap = this.maxHp * (this.world === 0 ? 0.28 : this.world === 1 ? 0.26 : 0.24);
+    return damage <= knee ? damage : Math.min(hardCap, knee + (damage - knee) * 0.35);
+  }
+
   hit(damage: number) {
-    if (!this.vulnerable || this.cooldown > 0) return false;
-    this.hp = this.hp - damage <= 0.0001 ? 0 : this.hp - damage;
+    if (!this.vulnerable || this.cooldown > 0) return 0;
+    const effective = this.capDamage(damage);
+    this.hp = this.hp - effective <= 0.0001 ? 0 : this.hp - effective;
     this.flash = 0.23;
-    this.cooldown = 0.32;
+    this.cooldown = 0.36;
     if (!this.hp) { this.mode = 'dead'; this.vx = 0; this.vy = 0; }
-    return true;
+    return effective;
   }
 
   tick(dt: number, map: TileMap, player: Player, events: BossEvents) {

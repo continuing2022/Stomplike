@@ -2,7 +2,7 @@ import { rng } from '../engine/Physics';
 import { ELITE_TRIALS, MODIFIERS, TRIAL_META, type Modifier, type TrialKind, type World } from '../level/LevelGenerator';
 import type { FlagGrade, StageResult } from '../level/Stage';
 import { CHARACTERS, type Character } from './Characters';
-import { countTags, relicOffer, type Relic } from './Relics';
+import { countTags, MAX_RELICS, MAX_SHIELD, MAX_TEMPER, OVERFLOW_SMELT_BONUS, RELICS, relicOffer, SMELT_COINS, type Rarity, type Relic } from './Relics';
 
 export type NodeType = 'stage' | 'elite' | 'shop' | 'event' | 'boss';
 export interface Node { kind: NodeType; name: string; detail: string; modifier: Modifier; trial?: TrialKind }
@@ -44,8 +44,13 @@ export class RunManager {
   coinTowardsLife = 0;
   stageStars = 0;
   rerolls: number;
+  temper = 0;
+  shieldsBought = 0;
+  shopShieldBought = false;
   freeRefresh = false;
   pendingElite?: Relic;
+  pendingEliteOverflow = false;
+  pendingEventRelic?: Relic;
   lastTrialDone = false;
   private lastResult?: StageResult;
 
@@ -53,7 +58,7 @@ export class RunManager {
     this.random = rng(seed);
     this.character = options.character ?? CHARACTERS[0];
     this.maxHearts = this.hearts = options.hearts ?? this.character.hearts;
-    this.shield = options.shield ?? this.character.shield;
+    this.shield = Math.min(MAX_SHIELD, options.shield ?? this.character.shield);
     this.coins = options.coins ?? this.character.coins;
     this.rerolls = options.rerolls ?? 0;
     this.parachutes = options.parachutes ?? 0;
@@ -61,6 +66,7 @@ export class RunManager {
   }
 
   get tags() { return countTags(this.relics); }
+  get isFull() { return this.relics.length >= MAX_RELICS; }
   nextSeed() { return Math.floor(this.random() * 4294967296); }
 
   makeRoutes() {
@@ -76,8 +82,12 @@ export class RunManager {
   enter(target: Node) {
     this.current = target;
     this.lastResult = undefined;
+    this.pendingElite = undefined;
+    this.pendingEliteOverflow = false;
+    this.pendingEventRelic = undefined;
     if (target.kind === 'shop') {
       this.freeRefresh = Boolean(this.options.freeShop || this.owned('blackmarket'));
+      this.shopShieldBought = false;
       this.refreshStock();
     }
     if (target.kind === 'event') {
@@ -101,16 +111,19 @@ export class RunManager {
     this.pendingElite = this.current.kind === 'elite' && result.trialDone
       ? relicOffer(this.relics, 10, this.random, this.options.luck, true).find(relic => relic.rarity !== 'common')
       : undefined;
-    if (this.pendingElite) this.add(this.pendingElite);
+    this.pendingEliteOverflow = false;
+    if (this.pendingElite && !this.add(this.pendingElite)) this.pendingEliteOverflow = true;
     const slots = result.trialDone ? 4 : 3;
-    this.rewards = relicOffer(this.relics, slots, this.random, this.options.luck);
+    const excluded = this.pendingElite ? [this.pendingElite] : [];
+    this.rewards = relicOffer(this.relics, slots, this.random, this.options.luck, false, excluded);
   }
 
   reroll() {
     if (!this.rerolls || !this.rewards.length) return;
     this.rerolls--;
     const slots = this.lastTrialDone ? 4 : 3;
-    this.rewards = relicOffer(this.relics, slots, this.random, this.options.luck, false, this.rewards);
+    const excluded = this.pendingElite ? [...this.rewards, this.pendingElite] : this.rewards;
+    this.rewards = relicOffer(this.relics, slots, this.random, this.options.luck, false, excluded);
   }
 
   finishNode() { this.depth++; this.makeRoutes(); }
@@ -125,20 +138,66 @@ export class RunManager {
   }
 
   owned(id: Relic['id']) { return this.relics.some(relic => relic.id === id); }
-  add(relic: Relic) { if (!this.relics.includes(relic)) this.relics.push(relic); }
+  add(relic: Relic) {
+    if (this.isFull || this.relics.includes(relic)) return false;
+    this.relics.push(relic);
+    return true;
+  }
+
+  smeltPreview(rarity: Rarity) {
+    const canTemper = this.temper < MAX_TEMPER;
+    return { coins: SMELT_COINS[rarity] + (canTemper ? 0 : OVERFLOW_SMELT_BONUS), canTemper };
+  }
+
+  smelt(rarity: Rarity) {
+    const { coins, canTemper } = this.smeltPreview(rarity);
+    if (canTemper) this.temper++;
+    this.coins += coins;
+    this.collected += coins;
+    return { coins, tempered: canTemper };
+  }
+
+  replace(oldRelic: Relic, newRelic: Relic) {
+    const idx = this.relics.indexOf(oldRelic);
+    if (idx < 0 || this.relics.includes(newRelic)) return undefined;
+    this.relics[idx] = newRelic;
+    return this.smelt(oldRelic.rarity);
+  }
+
+  salvageReward() {
+    this.rewards = [];
+    return this.smelt('common');
+  }
 
   price(base: number) { return Math.ceil(base * (this.options.discount ?? this.character.discount)); }
   relicPrice(relic: Relic) { return this.price({ common: 45, rare: 66, legendary: 96 }[relic.rarity]); }
+  shieldPrice() { return this.price(32 + this.shieldsBought * 18); }
+  canBuyShield() { return !this.shopShieldBought && this.shield < MAX_SHIELD && this.coins >= this.shieldPrice(); }
   spend(price: number) {
     if (this.coins < price) return false;
     this.coins -= price;
     return true;
   }
 
+  buyShield() {
+    if (!this.canBuyShield() || !this.spend(this.shieldPrice())) return false;
+    this.shield = Math.min(MAX_SHIELD, this.shield + 1);
+    this.shieldsBought++;
+    this.shopShieldBought = true;
+    return true;
+  }
+
   buy(relic: Relic) {
-    if (!this.stock.includes(relic) || !this.spend(this.relicPrice(relic))) return;
+    if (this.isFull || !this.stock.includes(relic) || !this.spend(this.relicPrice(relic))) return false;
     this.add(relic);
     this.stock = this.stock.filter(item => item !== relic);
+    return true;
+  }
+
+  buyWithReplace(oldRelic: Relic, relic: Relic) {
+    if (!this.relics.includes(oldRelic) || !this.stock.includes(relic) || !this.spend(this.relicPrice(relic))) return undefined;
+    this.stock = this.stock.filter(item => item !== relic);
+    return this.replace(oldRelic, relic);
   }
 
   refreshShop() {
@@ -151,21 +210,44 @@ export class RunManager {
     this.stock = relicOffer(this.relics, this.owned('blackmarket') ? 4 : 3, this.random, this.options.luck, false, this.stock);
   }
 
+  canAcceptSmith() {
+    if (this.coins < this.price(28)) return false;
+    const counts = this.tags;
+    const hasRarePool = RELICS.some(relic => relic.rarity === 'rare' && !this.relics.includes(relic) &&
+      (!relic.requires || relic.requires.every(tag => counts[tag] >= 2)));
+    return hasRarePool || this.shield < MAX_SHIELD || this.temper < MAX_TEMPER;
+  }
+
   resolveEvent() {
+    this.pendingEventRelic = undefined;
     if (this.event === 'fountain') return '';
     if (this.event === 'gambler') {
       if (this.hearts < 2) return '';
       const chance = relicOffer(this.relics, 24, this.random, this.options.luck).find(relic => relic.rarity === 'legendary');
       if (!chance) return '';
       this.hearts--;
-      this.add(chance);
-      return `获得「${chance.name}」。`;
+      if (this.add(chance)) return `获得「${chance.name}」。`;
+      this.pendingEventRelic = chance;
+      return '';
     }
-    if (!this.spend(this.price(28))) return '';
     const target = relicOffer(this.relics, 24, this.random, this.options.luck, true).find(relic => relic.rarity === 'rare');
-    if (target) { this.add(target); return `铁匠打造了「${target.name}」。`; }
-    this.shield += 2;
-    return '铁匠为你打造了 2 点护盾。';
+    if (!target && this.shield >= MAX_SHIELD && this.temper >= MAX_TEMPER) return '';
+    if (!this.spend(this.price(28))) return '';
+    if (target) {
+      if (this.add(target)) return `铁匠打造了「${target.name}」。`;
+      this.pendingEventRelic = target;
+      return '';
+    }
+    const before = this.shield;
+    this.shield = Math.min(MAX_SHIELD, this.shield + 2);
+    const gained = this.shield - before;
+    if (gained > 0 && gained < 2 && this.temper < MAX_TEMPER) {
+      this.temper++;
+      return `铁匠为你补满护盾（+${gained}）并淬炼了锋芒（★${this.temper}）。`;
+    }
+    if (gained > 0) return `铁匠为你打造了 ${gained} 点护盾。`;
+    this.temper = Math.min(MAX_TEMPER, this.temper + 1);
+    return `铁匠为你淬炼了流派锋芒（★${this.temper}）。`;
   }
 
   summarize(won: boolean): RunSummary {
