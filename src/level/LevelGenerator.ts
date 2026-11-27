@@ -105,9 +105,12 @@ export function generateLevel(seed: number, world: World, depth: number, modifie
   [4, 5, 11].forEach(x => coins.push({ x: x * TILE + 7, y: 389 }));
   spawn('walker', 13, 12);
 
+  let crystalsPlaced = 1;
   let start = START;
   const chunkSpans: Array<{ start: number; width: number; chunk: Chunk }> = [];
-  for (const chunk of chunks) {
+  for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
+    const chunk = chunks[chunkIdx];
+    const allowCrystal = () => chunkIdx >= 2 && crystalsPlaced < 2 && Boolean(++crystalsPlaced);
     const width = chunk.layout[0].length;
     chunkSpans.push({ start, width, chunk });
     if (chunk.fireRain) {
@@ -119,10 +122,10 @@ export function generateLevel(seed: number, world: World, depth: number, modifie
       switch (cell) {
         case '#': map.set(x, y, 'ground'); break;
         case 'b':
-          map.set(x, y, random() < 0.24 ? 'question' : 'brick', random() < 0.12 ? 'crystal' : 'coin');
+          map.set(x, y, random() < 0.24 ? 'question' : 'brick', random() < 0.1 && allowCrystal() ? 'crystal' : 'coin');
           break;
-        case '?': map.set(x, y, 'question', random() < 0.16 ? 'crystal' : 'coin'); break;
-        case 'R': map.set(x, y, 'question', 'crystal'); break;
+        case '?': map.set(x, y, 'question', random() < 0.14 && allowCrystal() ? 'crystal' : 'coin'); break;
+        case 'R': map.set(x, y, 'question', allowCrystal() ? 'crystal' : 'coin'); break;
         case 'h': if (random() < 0.72) map.set(x, y, 'question', 'hidden'); break;
         case 't': map.set(x, y, 'pipe'); break;
         case 's': map.set(x, y, 'spring'); hasCustomSpring = true; break;

@@ -4,16 +4,16 @@ import type { Sprite } from '../graphics/PixelRenderer';
 export type Tag = 'stomp' | 'block' | 'projectile' | 'greed';
 export type Rarity = 'common' | 'rare' | 'legendary';
 export const TAGS: Record<Tag, { name: string; color: string; pair: string; set: string }> = {
-  stomp: { name: '踩踏轰击', color: '#f89198', pair: '踩踏反弹 +15%，连踩递增伤害', set: '落地或三连踩释放震荡，刷新空中能力' },
-  block: { name: '砖块爆破', color: '#ffba83', pair: '顶砖飞溅四枚碎片', set: '碎砖有 25% 概率变为临时金色问号砖' },
-  projectile: { name: '火球龟壳', color: '#82cffa', pair: '解锁弹跳火球，踢壳速度 +30%', set: '火球额外弹射两次，龟壳连撞增伤' },
-  greed: { name: '贪婪金币', color: '#ffdc7e', pair: '拾币范围 +80%，拾币后加速', set: '拾币有 15% 概率射出追踪金币' },
+  stomp: { name: '踩踏轰击', color: '#f89198', pair: '踩踏伤 +15%、反弹 +15%，连踩递增', set: '踩踏伤 +30%，落地或三连踩释放震荡并刷新跳跃' },
+  block: { name: '砖块爆破', color: '#ffba83', pair: '技伤 +10%，顶砖飞溅四枚碎片', set: '技伤 +22%，碎砖 25% 概率化为金色问号砖' },
+  projectile: { name: '火球龟壳', color: '#82cffa', pair: '弹幕伤 +15%，解锁火球且踢壳提速', set: '弹幕伤 +30%，火球弹射两次且龟壳连撞增伤' },
+  greed: { name: '贪婪金币', color: '#ffdc7e', pair: '拾币范围 +80%，拾币后加速增攻速', set: '拾币有 18% 概率射出高伤追踪金币' },
 };
 export const RARITY_NAMES = { common: '普通', rare: '稀有', legendary: '传说' };
 export const MAX_RELICS = 8;
 export const MAX_SHIELD = 3;
 export const MAX_TEMPER = 5;
-export const TEMPER_BONUS = 0.06;
+export const TEMPER_BONUS = 0.08;
 export const SMELT_COINS: Readonly<Record<Rarity, number>> = { common: 18, rare: 28, legendary: 42 };
 export const OVERFLOW_SMELT_BONUS = 14;
 export type Effect = 'thunder' | 'pound' | 'insoles' | 'siphon' | 'gravity' | 'blast' | 'dice' | 'portable' | 'charge' | 'demolition' |
@@ -46,16 +46,16 @@ export const RELICS: readonly Relic[] = [
   item('portable', '随身弹簧砖', 'rare', ['block'], '按技能或下砸时召唤一块存在 4 秒的临时砖。'),
   item('charge', '砖块充能器', 'rare', ['block'], '每亲自顶砖 5 次获得 3 秒星辉霸体。'),
   item('demolition', '连锁拆迁令', 'legendary', ['block'], '击败敌人有 40% 概率留下炸弹砖，顶撞后爆破。'),
-  item('fire', '火焰花徽章', 'common', ['projectile'], 'J / X 发射弹跳火球，命中附加灼烧。'),
-  item('ice', '冰霜花徽章', 'common', ['projectile'], 'J / X 发射冰球，冻结的敌人可以踢飞。'),
+  item('fire', '火焰花徽章', 'common', ['projectile'], 'J / X 发射弹跳火球，命中附加可成长灼烧。'),
+  item('ice', '冰霜花徽章', 'common', ['projectile'], 'J / X 发射冰球冻结敌人，触碰即可直接踢飞成冰壳。'),
   item('twin', '双联火筒', 'rare', ['projectile'], '每次发射两枚不同弧度的投射物。'),
   item('perpetual', '永动刺壳', 'rare', ['projectile'], '每 6 秒在身边生成一枚可踢的追踪龟壳。'),
   item('billiards', '烈焰台球大师', 'legendary', ['projectile'], '火球点燃龟壳，将其变成可碾碎砖块的烈焰巨轮。'),
-  item('midas', '点金手套', 'common', ['greed'], '败敌掉币 +50%，连续拾币最高获得 2 倍收益。'),
+  item('midas', '点金手套', 'common', ['greed'], '败敌掉币 +35%，连续拾币最高获得 1.5 倍收益。'),
   item('talisman', '黄金护身符', 'rare', ['greed'], '消耗 40 金币抵消受击并散落少量金币，每关两次。'),
   item('blackmarket', '黑市会员卡', 'common', ['greed'], '商店多一件遗物，每店首次刷新免费。'),
-  item('heavy', '重金砸人', 'rare', ['greed'], '发射或踩踏消耗 3 金币，使本次伤害 +60%。'),
-  item('crown', '迈达斯王冠', 'legendary', ['greed'], '每持有 100 金币伤害 +25%（最高 +100%），旗杆奖励翻倍。'),
+  item('heavy', '重金砸人', 'rare', ['greed'], '发射或踩踏消耗 4 金币，使本次伤害 +40%。'),
+  item('crown', '迈达斯王冠', 'legendary', ['greed'], '每持有 100 金币伤害 +20%（最高 +80%），旗杆奖励翻倍。'),
   item('lava', '熔岩践踏', 'legendary', ['stomp', 'projectile'], '踩踏或重砸会向两侧各喷射两枚火球。', ['stomp', 'projectile']),
   item('alchemist', '点石成金', 'legendary', ['block', 'greed'], '碎砖喷出高价值金币，落地前能砸伤敌人。', ['block', 'greed']),
   item('wrecking', '拆迁铁球', 'legendary', ['projectile', 'block'], '高速龟壳撞碎砖块并远程顶开问号砖。', ['projectile', 'block']),
@@ -86,10 +86,15 @@ export function pickPreferredTag(counts: Readonly<Record<Tag, number>>, random: 
   return active[active.length - 1];
 }
 
+export function canUnlockRelic(relic: Relic, counts: Readonly<Record<Tag, number>>) {
+  if (!relic.requires) return true;
+  return relic.requires.every(tag => counts[tag] >= 1) &&
+    relic.requires.reduce((sum, tag) => sum + counts[tag], 0) >= 3;
+}
+
 export function relicOffer(owned: readonly Relic[], amount: number, random: () => number, luck = 0, guaranteeRare = false, excluded: readonly Relic[] = []) {
   const counts = countTags(owned);
-  const eligible = RELICS.filter(relic => !owned.includes(relic) &&
-    (!relic.requires || relic.requires.every(tag => counts[tag] >= 2)));
+  const eligible = RELICS.filter(relic => !owned.includes(relic) && canUnlockRelic(relic, counts));
   let pool = eligible.filter(relic => !excluded.includes(relic));
   const favoredTag = amount >= 2 ? pickPreferredTag(counts, random) : undefined;
   const result: Relic[] = [];

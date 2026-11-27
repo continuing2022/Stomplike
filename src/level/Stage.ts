@@ -3,7 +3,7 @@ import { Camera } from '../engine/Camera';
 import { HEIGHT, TILE, WIDTH } from '../engine/GameEngine';
 import type { InputManager } from '../engine/InputManager';
 import { clamp, move, overlaps, stomped, type Body } from '../engine/Physics';
-import { Boss, type BossEvents } from '../entities/Boss';
+import { Boss, type BossEvents, type BossHitSource } from '../entities/Boss';
 import { Enemy, type EnemyShot } from '../entities/Enemy';
 import { Player, type PlayerEvents } from '../entities/Player';
 import { Projectile } from '../entities/Projectile';
@@ -119,9 +119,9 @@ export class Stage {
     this.player.maxHearts = run.maxHearts;
     this.player.shield = Math.min(MAX_SHIELD, run.shield);
     this.player.mayPound = this.effects.has('pound');
-    for (const coin of level.coins) this.pickup(coin.x, coin.y, 'coin', 2);
+    for (const coin of level.coins) this.pickup(coin.x, coin.y, 'coin', 1);
     for (const crest of level.crests) this.pickup(crest.x, crest.y, 'crest', 8);
-    const eliteBoost = run.current.kind === 'elite' ? (this.modifier === 'double-coins' ? 0.65 : 0.35) : 0;
+    const eliteBoost = run.current.kind === 'elite' ? (this.modifier === 'double-coins' ? 0.45 : 0.25) : 0;
     for (const spawn of level.enemies) {
       this.enemies.push(new Enemy(spawn.kind, spawn.x, spawn.y, spawn.direction, run.heat, this.world, run.depth, eliteBoost));
     }
@@ -154,7 +154,7 @@ export class Stage {
 
   private triggerBlockSynergy(x: number, y: number, direct = true) {
     if (this.tags.block >= 2) {
-      for (let i = 0; i < 4; i++) this.projectiles.push(new Projectile('shard', x, y - 20, (i - 1.5) * 120, -195 - i % 2 * 65, 1.15));
+      for (let i = 0; i < 4; i++) this.projectiles.push(new Projectile('shard', x, y - 20, (i - 1.5) * 120, -195 - i % 2 * 65, this.damage(1.15, false, 'block')));
     }
     if (direct && this.player.star <= 0 && this.has('charge') && ++this.charges % 5 === 0) {
       this.player.star = Math.max(this.player.star, 3);
@@ -240,14 +240,16 @@ export class Stage {
   }
 
   private hitBlock(tile: Tile, force = false, direct = !force) {
-    if (tile.kind === 'switch' && tile.bump <= 0 && this.boss) {
+    if (tile.kind === 'switch' && tile.bump <= 0 && tile.cooldown <= 0 && this.boss) {
       tile.bump = 0.2;
+      tile.cooldown = this.world === 1 ? 7.5 : 4.5;
       if (this.world === 1) this.boss.expose();
       else if (this.world === 0) this.bossEvents.emit('rock', tile.x + 4, tile.y + 36, 0, 110, false);
       this.feedback.audio.play('powerup');
       this.particles.burst(tile.x + 16, tile.y + 16, 16, ['#bcfcff', '#7bd7f7'], 120, 40, true);
       return;
     }
+    if (tile.kind === 'switch') { this.feedback.audio.play('blockBump'); return; }
     if (!['question', 'brick', 'bomb'].includes(tile.kind) || tile.bump > 0) return;
     const kind = tile.kind;
     tile.bump = 0.2;
@@ -279,7 +281,7 @@ export class Stage {
     if (!broken) { this.feedback.audio.play('blockBump'); return; }
     this.map.remove(tile);
     if (steel && kind === 'brick') this.sprayCoins(x, y - 8, 2, 1);
-    if (this.has('alchemist')) this.sprayCoins(x, y - 9, 6, 3, true);
+    if (this.has('alchemist')) this.sprayCoins(x, y - 9, 4, 2, true);
     else this.particles.debris(x, y, ['#f0a27c', '#aa5d59']);
     if (this.tags.block >= 4 && this.random() < 0.25 && kind === 'brick') {
       const bonus = this.map.set(tile.x / TILE, tile.y / TILE, 'question');
@@ -307,13 +309,13 @@ export class Stage {
     if (this.has('midas')) {
       this.coinChain = this.time - this.lastCoin < 0.8 ? this.coinChain + 1 : 1;
       this.lastCoin = this.time;
-      value = Math.round(value * Math.min(2, 1 + (this.coinChain - 1) * 0.2));
+      value = Math.round(value * Math.min(1.5, 1 + (this.coinChain - 1) * 0.1));
     }
     this.coins += value;
     this.balance += value;
     this.run.coinTowardsLife += value;
-    while (this.run.coinTowardsLife >= 135) {
-      this.run.coinTowardsLife -= 135;
+    while (this.run.coinTowardsLife >= 160) {
+      this.run.coinTowardsLife -= 160;
       if (this.player.hearts < this.player.maxHearts) {
         this.player.hearts++;
         this.particles.text(this.player.center, this.player.y - 10, '1UP!', '#a8f1bd');
@@ -327,10 +329,10 @@ export class Stage {
       this.feedback.audio.play('powerup');
     }
     if (this.tags.greed >= 2) this.player.coinBoost = 4;
-    if (this.tags.greed >= 4 && this.random() < 0.15) {
+    if (this.tags.greed >= 4 && this.random() < 0.18) {
       const target = this.nearby(x, y, 480)[0];
       if (target) {
-        const dart = new Projectile('dart', x, y, 0, 0, this.damage(1.4));
+        const dart = new Projectile('dart', x, y, 0, 0, this.damage(1.5, false, 'projectile'));
         dart.target = target;
         this.projectiles.push(dart);
       }
@@ -345,17 +347,23 @@ export class Stage {
     return this.enemies.filter(e => e.alive && e.visible && dist(e) < max).sort((a, b) => dist(a) - dist(b));
   }
 
-  private damage(base: number, expensive = false) {
+  private damage(base: number, expensive = false, category: 'any' | 'stomp' | 'projectile' | 'block' = 'any') {
     const buckBonus = this.run.character.id === 'buck' ? Math.min(0.6, Math.floor(this.balance / 50) * 0.1) : 0;
-    const crownBonus = this.has('crown') ? Math.min(1, Math.floor(this.balance / 100) * 0.25) : 0;
+    const crownBonus = this.has('crown') ? Math.min(0.8, Math.floor(this.balance / 100) * 0.2) : 0;
     const temperBonus = this.run.temper * TEMPER_BONUS;
-    let value = base * (1 + buckBonus + crownBonus + temperBonus);
+    const blockBonus = this.tags.block >= 4 ? 0.22 : this.tags.block >= 2 ? 0.1 : 0;
+    const catBonus = category === 'stomp'
+      ? (this.tags.stomp >= 4 ? 0.3 : this.tags.stomp >= 2 ? 0.15 : 0)
+      : category === 'projectile'
+        ? (this.tags.projectile >= 4 ? 0.3 : this.tags.projectile >= 2 ? 0.15 : 0)
+        : 0;
+    let value = base * (1 + buckBonus + crownBonus + temperBonus + blockBonus + catBonus);
     if (expensive && this.has('heavy')) {
-      if (this.heavyBoost > 0) value *= 1.6;
-      else if (this.balance >= 3) {
-        this.balance -= 3;
-        this.heavyBoost = 0.55;
-        value *= 1.6;
+      if (this.heavyBoost > 0) value *= 1.4;
+      else if (this.balance >= 4) {
+        this.balance -= 4;
+        this.heavyBoost = 0.35;
+        value *= 1.4;
       }
     }
     return value;
@@ -416,7 +424,7 @@ export class Stage {
       const angles = lv2
         ? [-0.42, -0.21, 0, 0.21, 0.42]
         : twin ? [-0.33, -0.11, 0.11, 0.33] : [-0.26, 0, 0.26];
-      const power = this.damage((lv2 ? 1.05 : 0.92) * rapidMul, true);
+      const power = this.damage((lv2 ? 1.05 : 0.92) * rapidMul, true, 'projectile');
       for (const a of angles) {
         const shot = new Projectile('spread', muzzleX, muzzleY, p.face * Math.cos(a) * 460, Math.sin(a) * 460, power, false, bounces);
         shot.element = element;
@@ -430,7 +438,7 @@ export class Stage {
       const bw = lv2 ? 56 : 40;
       const bh = lv2 ? 13 : 9;
       const bx = p.face > 0 ? p.center + 10 : p.center - 10 - bw;
-      const power = this.damage((lv2 ? 2.2 : 1.6) * rapidMul, true);
+      const power = this.damage((lv2 ? 2.2 : 1.6) * rapidMul, true, 'projectile');
       const beam = new Projectile('laser', bx, muzzleY, p.face * 650, 0, power);
       beam.w = bw;
       beam.h = bh;
@@ -449,7 +457,7 @@ export class Stage {
       const count = (lv2 ? 3 : 2) + (twin ? 1 : 0);
       const enemies = this.nearby(p.center, p.y, 640);
       const targets: Body[] = this.boss && this.boss.vulnerable ? [this.boss, ...enemies] : enemies;
-      const power = this.damage((lv2 ? 1.15 : 0.98) * rapidMul, true);
+      const power = this.damage((lv2 ? 1.15 : 0.98) * rapidMul, true, 'projectile');
       for (let i = 0; i < count; i++) {
         const vy = (i - (count - 1) / 2) * 115 - 30;
         const missile = new Projectile('missile', muzzleX, muzzleY, p.face * 340, vy, power, false, bounces);
@@ -462,21 +470,23 @@ export class Stage {
       this.feedback.audio.play('fireball');
       baseDelay = 0.40;
     } else if (arsenal === 'F') {
-      const power = this.damage((lv2 ? 1.85 : 1.4) * rapidMul, true);
-      const wheel = new Projectile('flame', muzzleX, muzzleY - 3, p.face * 340, 0, power);
+      const power = this.damage((lv2 ? 1.85 : 1.4) * rapidMul, true, 'projectile');
+      const flameY = Math.min(muzzleY - 10, p.feet - 32);
+      const wheel = new Projectile('flame', muzzleX, flameY, p.face * 360, 0, power, false, bounces);
       wheel.element = element ?? 'fire';
       wheel.splash = lv2 ? 48 : 0;
       if (lv2) { wheel.w = 26; wheel.h = 26; }
+      wheel.onWall = body => this.particles.burst(body.x, body.y, 5, ['#ff924c', '#fff3b0']);
       this.projectiles.push(wheel);
       if (twin) {
-        const second = new Projectile('flame', muzzleX, muzzleY - 16, p.face * 320, 0, power * 0.75);
+        const second = new Projectile('flame', muzzleX, flameY - 14, p.face * 335, 0, power * 0.75, false, bounces);
         second.element = element ?? 'fire';
         this.projectiles.push(second);
       }
       this.feedback.audio.play('fireball');
       baseDelay = 0.42;
     } else if (rapidFallback) {
-      const power = this.damage(1.05, true);
+      const power = this.damage(1.05, true, 'projectile');
       const shot = new Projectile('spread', muzzleX, muzzleY, p.face * 485, 0, power, false, bounces);
       shot.onWall = body => this.particles.burst(body.x, body.y, 4, GOLD);
       this.projectiles.push(shot);
@@ -485,7 +495,7 @@ export class Stage {
     } else {
       const both = this.has('fire') && this.has('ice');
       const primary: 'fire' | 'ice' = both ? (twin ? 'fire' : (this.shotToggle++ % 2 ? 'ice' : 'fire')) : (this.has('ice') ? 'ice' : 'fire');
-      const power = this.damage(1.25 * rapidMul, true);
+      const power = this.damage(1.25 * rapidMul, true, 'projectile');
       this.fire(primary, muzzleX, muzzleY, p.face, -108, power);
       if (twin) this.fire(both ? 'ice' : primary, muzzleX, muzzleY - 7, p.face, -235, power);
       this.feedback.audio.play('fireball');
@@ -504,8 +514,8 @@ export class Stage {
 
   private lava(x: number, y: number) {
     for (const face of [-1, 1]) {
-      this.fire('fire', x, y, face, -120, this.damage(1.1));
-      this.fire('fire', x, y - 4, face, -258, this.damage(1.1));
+      this.fire('fire', x, y, face, -120, this.damage(1.1, false, 'projectile'));
+      this.fire('fire', x, y - 4, face, -258, this.damage(1.1, false, 'projectile'));
     }
   }
 
@@ -515,12 +525,12 @@ export class Stage {
     if (pound) {
       const tiles = this.map.candidates({ x: p.x - 20, y: p.feet, w: p.w + 40, h: 5 });
       for (const tile of tiles) this.hitBlock(tile, true, true);
-      this.shock(p.center, p.feet - 21, this.damage(1.7));
+      this.shock(p.center, p.feet - 21, this.damage(1.7, false, 'stomp'));
       if (this.has('lava')) this.lava(p.center, p.feet - 20);
       if (this.has('portable')) this.temporaryBrick(true);
       this.feedback.audio.play('blockBreak');
       this.feedback.freeze(0.05);
-    } else if (this.tags.stomp >= 4 && p.combo > 0) this.shock(p.center, p.feet - 21, this.damage(0.8));
+    } else if (this.tags.stomp >= 4 && p.combo > 0) this.shock(p.center, p.feet - 21, this.damage(0.85, false, 'stomp'));
   }
 
   private stompEffects(x: number, y: number) {
@@ -536,7 +546,7 @@ export class Stage {
         const bolt = new Projectile('lightning', e.center, e.y + 9, 0, 0, 0);
         bolt.line = { x, y };
         this.projectiles.push(bolt);
-        this.hitEnemy(e, this.damage(1.2));
+        this.hitEnemy(e, this.damage(1.2, false, 'stomp'));
       }
     }
     if (this.has('gravity')) for (const e of this.nearby(x, y, 96)) {
@@ -550,7 +560,7 @@ export class Stage {
       this.particles.text(p.center, p.y - 14, '+1 SHIELD', '#8ceaff');
     }
     if (this.tags.stomp >= 4 && p.combo % 3 === 0) {
-      this.shock(x, y, this.damage(0.8));
+      this.shock(x, y, this.damage(0.85, false, 'stomp'));
       if (p.doubleJump && !p.extraJump) p.extraJump = true;
       else p.bonusJump = true;
       this.particles.text(p.center, p.y - 16, 'AIR JUMP!', '#f89198');
@@ -575,8 +585,10 @@ export class Stage {
       this.feedback.audio.play('coin');
       return;
     }
-    if (!fall && p.shield) p.shield--;
-    else if (!fall && p.powered) p.setPower(false, this.map);
+    if (p.shield) {
+      p.shield--;
+      if (fall) this.particles.text(p.center, p.y - 45, 'SHIELD!', '#8ceaff');
+    } else if (!fall && p.powered) p.setPower(false, this.map);
     else p.hearts--;
     if (!fall && this.modifier === 'double-coins' && this.balance > 0) {
       const lost = Math.min(12, this.balance);
@@ -610,7 +622,7 @@ export class Stage {
     }
     const arsenalGreed = this.tags.greed >= 1 && (this.player.arsenalTime > 0 || this.player.rapidTime > 0) ? 2 : 0;
     const bounty = this.modifier === 'double-coins' ? 2 : 1;
-    const reward = (5 + shellCombo * 2 + arsenalGreed) * (this.has('midas') ? 1.5 : 1) * bounty;
+    const reward = (4 + shellCombo * 2 + arsenalGreed) * (this.has('midas') ? 1.35 : 1) * bounty;
     this.pickup(enemy.center - 8, enemy.y - 12, 'coin', Math.ceil(reward), true, shellCombo ? this.player.face * 48 : 0, -140);
     this.particles.burst(enemy.center, enemy.y + 8, 9, GOLD, 102, 110, true);
     if (shellCombo > 1) this.particles.text(enemy.center, enemy.y - 10, 'x' + shellCombo + '!');
@@ -655,8 +667,8 @@ export class Stage {
         this.particles.burst(orb.x, orb.y, 6, ['#ff924c', '#fff3b0']);
         this.hitEnemy(e, this.damage(0.65));
       }
-      if (this.boss && this.boss.vulnerable && this.boss.cooldown <= 0 && overlaps(box, this.boss)) {
-        this.hitBoss(this.damage(0.55), orb.x, orb.y);
+      if (this.boss && this.boss.vulnerable && this.boss.orbitCooldown <= 0 && overlaps(box, this.boss)) {
+        this.hitBoss(this.damage(0.55, false, 'projectile'), orb.x, orb.y, 'orbit');
       }
     }
   }
@@ -732,7 +744,7 @@ export class Stage {
       if (shot.life <= 0 || shot.type === 'lightning') continue;
       if (!shot.hostile && this.boss && this.boss.world === 0 && shot.type === 'rock' && this.boss.vulnerable && overlaps(shot, this.boss)) {
         this.boss.expose();
-        this.hitBoss(this.damage(1.5), shot.x, shot.y);
+        this.hitBoss(this.damage(1.5, false, 'block'), shot.x, shot.y, 'stomp');
         shot.life = 0;
         continue;
       }
@@ -750,11 +762,11 @@ export class Stage {
 
       if (this.boss && this.boss.vulnerable && !shot.hit.has(this.boss) && overlaps(shot, this.boss)) {
         const bossMul = this.boss.world === 2 && this.boss.mode !== 'exposed' ? 0.55 : 0.75;
-        if (this.hitBoss(shot.damage * bossMul, shot.x, shot.y)) {
-          shot.hit.add(this.boss);
-          if (shot.splash > 0) this.splashDamage(shot.x, shot.y, shot.splash, shot.damage * 0.45);
-          if (!shot.pierce) { shot.life = 0; continue; }
+        shot.hit.add(this.boss);
+        if (this.hitBoss(shot.damage * bossMul, shot.x, shot.y, 'shot') && shot.splash > 0) {
+          this.splashDamage(shot.x, shot.y, shot.splash, shot.damage * 0.45);
         }
+        if (!shot.pierce) { shot.life = 0; continue; }
       }
       if ((shot.type === 'fire' || shot.type === 'ice' || shot.type === 'missile' || shot.type === 'flame') && Math.floor(shot.age * 60) % 3 === 0) {
         const trail = shot.type === 'ice' ? ['#b9ecfa'] : shot.type === 'missile' ? ['#dfafff', '#fff3c4'] : ['#fdb26d', '#ff7b47'];
@@ -776,10 +788,10 @@ export class Stage {
         if (!blocked) {
           const chill = shot.type === 'ice' || shot.element === 'ice' || shot.element === 'both';
           const burn = (shot.type === 'fire' && this.has('fire')) || shot.type === 'flame' || shot.element === 'fire' || shot.element === 'both';
-          if (chill) { e.chilled = 3.5; e.stunned = Math.max(e.stunned, 0.55); }
+          if (chill) { e.chilled = 3.5; e.stunned = Math.max(e.stunned, shot.type === 'ice' ? 1.1 : 0.55); }
           if (burn) { e.burn = 1.8; e.burnTick = 0.4; }
           if (shot.type === 'laser' && shot.h >= 12) e.stunned = Math.max(e.stunned, 0.4);
-          const mul = shot.type === 'ice' && e.kind !== 'plant' ? 0.68 : 1;
+          const mul = shot.type === 'ice' && e.kind !== 'plant' ? 0.82 : 1;
           this.hitEnemy(e, shot.damage * mul);
           if (shot.splash > 0) this.splashDamage(e.center, e.y + 8, shot.splash, shot.damage * 0.5, e);
         }
@@ -819,7 +831,7 @@ export class Stage {
       if (enemy.burn > 0) {
         enemy.burn -= dt;
         enemy.burnTick -= dt;
-        if (enemy.burnTick <= 0) { enemy.burnTick = 0.4; this.hitEnemy(enemy, 0.36); }
+        if (enemy.burnTick <= 0) { enemy.burnTick = 0.4; this.hitEnemy(enemy, this.damage(0.36, false, 'projectile')); }
       }
       if (!enemy.alive || !enemy.visible) continue;
       if (enemy.state === 'rolling') {
@@ -829,23 +841,25 @@ export class Stage {
           for (const tile of this.map.candidates(contact)) if (overlaps(contact, tile)) this.hitBlock(tile, true, false);
         }
         for (const target of this.enemies) {
-          if (target !== enemy && target.alive && target.visible && target.state !== 'rolling' && overlaps(enemy, target)) {
+          if (target !== enemy && target.alive && target.visible && target.state !== 'rolling' && target.shellCooldown <= 0 && overlaps(enemy, target)) {
+            target.shellCooldown = 0.38;
             this.splitShell(enemy);
             if (!enemy.flaming) {
-              const hits = this.tags.projectile >= 4
+              const baseHits = this.tags.projectile >= 4
                 ? 2.2 * (1 + Math.min(4, enemy.shellKills) * 0.35)
                 : 2.0;
-              if (hits < target.hp) this.hitEnemy(target, hits);
-              else this.defeat(target, ++enemy.shellKills);
+              const hits = this.damage(baseHits, false, 'projectile');
+              if (hits < target.hp) {
+                target.stunned = Math.max(target.stunned, 0.45);
+                target.vy = -135;
+                this.hitEnemy(target, hits);
+              } else this.defeat(target, ++enemy.shellKills);
             } else this.defeat(target, ++enemy.shellKills);
           }
         }
       }
       if (p.recover > 0 || p.hearts <= 0) continue;
       if (p.star > 0 && overlaps(p, enemy)) { this.defeat(enemy); continue; }
-      if (enemy.state === 'active' && enemy.chilled > 0 && enemy.kind !== 'plant' && enemy.kind !== 'cannonball' && overlaps(p, enemy) && !p.falling) {
-        enemy.hideInShell(enemy.kind !== 'koopa');
-      }
       if (enemy.state === 'shell' && enemy.stateTime <= 0 && overlaps(p, enemy)) {
         enemy.kick(Math.sign(enemy.center - p.center) || p.face, 410 * (this.tags.projectile >= 2 ? 1.3 : 1));
         this.feedback.audio.play('shellKick');
@@ -857,7 +871,7 @@ export class Stage {
         const press = this.stompDamage();
         if (enemy.kind === 'cannonball' && this.boss?.world === 1) {
           this.boss.expose();
-          this.hitBoss(0.65, enemy.center, enemy.y);
+          this.hitBoss(0.65, enemy.center, enemy.y, 'stomp');
         }
         if (enemy.kind === 'wing' && !enemy.wingLost) { enemy.wingLost = true; enemy.vy = 160; }
         else if ((enemy.kind === 'koopa' && enemy.state === 'active') || enemy.state === 'rolling') enemy.hideInShell(enemy.frozenShell);
@@ -871,6 +885,11 @@ export class Stage {
         this.particles.burst(p.center, p.feet + 2, 8, GOLD, 100, 100, true);
         this.feedback.freeze(0.035);
         this.camera.shake(2.5);
+      } else if (enemy.state === 'active' && enemy.chilled > 0 && enemy.kind !== 'plant' && enemy.kind !== 'cannonball' && overlaps(p, enemy)) {
+        enemy.hideInShell(enemy.kind !== 'koopa');
+        enemy.kick(Math.sign(enemy.center - p.center) || p.face, 410 * (this.tags.projectile >= 2 ? 1.3 : 1));
+        this.feedback.audio.play('shellKick');
+        this.particles.burst(enemy.center, enemy.y, 8, ['#b9ecfa', '#ffffff']);
       } else if (enemy.state !== 'shell' && (enemy.state !== 'rolling' || enemy.stateTime <= 0) && overlaps(p, enemy)) {
         this.hurt(Math.sign(p.center - enemy.center) || -p.face);
       }
@@ -880,13 +899,13 @@ export class Stage {
 
   private stompDamage() {
     const p = this.player;
-    return this.damage((p.pounding ? 2.2 : 1) * (1 + (this.run.character.comboDamage + (this.tags.stomp >= 2 ? 0.25 : 0)) * (p.combo - 1)), true);
+    return this.damage((p.pounding ? 2.2 : 1) * (1 + (this.run.character.comboDamage + (this.tags.stomp >= 2 ? 0.25 : 0)) * (p.combo - 1)), true, 'stomp');
   }
 
-  private hitBoss(damage: number, x: number, y: number) {
+  private hitBoss(damage: number, x: number, y: number, source: BossHitSource = 'shot') {
     const boss = this.boss;
     if (!boss) return false;
-    const dealt = boss.hit(damage);
+    const dealt = boss.hit(damage, source);
     if (!dealt) return false;
     this.particles.text(x, y - 10, '−' + Number(dealt.toFixed(1)));
     this.particles.burst(x, y, 14, GOLD, 135, 130, true);
@@ -914,7 +933,7 @@ export class Stage {
     for (const shell of this.enemies) {
       if (shell.state !== 'rolling' || shell.stateTime > 0 || !overlaps(shell, boss)) continue;
       if (boss.world === 1 && !boss.vulnerable) boss.expose();
-      if (this.hitBoss(this.damage(shell.flaming ? 2.5 : 1.3), shell.center, shell.y)) {
+      if (this.hitBoss(this.damage(shell.flaming ? 2.5 : 1.3, false, 'projectile'), shell.center, shell.y, 'stomp')) {
         shell.stateTime = 0.45;
         shell.vx *= -1;
       }
@@ -922,7 +941,7 @@ export class Stage {
     if (stomped(p, p.previousFeet, boss, p.falling)) {
       if (boss.vulnerable) {
         p.combo++;
-        if (this.hitBoss(this.stompDamage(), boss.center, boss.y)) {
+        if (this.hitBoss(this.stompDamage(), boss.center, boss.y, 'stomp')) {
           this.bestCombo = Math.max(this.bestCombo, p.combo);
           this.feedback.audio.play('stomp', p.combo);
           this.stompEffects(boss.center, boss.y);

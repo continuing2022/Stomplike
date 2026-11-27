@@ -24,6 +24,7 @@ const tyrant = pixels(
 const bodies = [mushroom, tortoise, tyrant];
 const warning = ['跃起重压', '巨壳冲撞', '俯冲逼近'];
 type Mode = 'rest' | 'warning' | 'air' | 'dash' | 'exposed' | 'dead';
+export type BossHitSource = 'stomp' | 'shot' | 'orbit';
 export interface BossEvents {
   emit: (type: ProjectileType, x: number, y: number, vx: number, vy: number, hostile: boolean) => void;
   minion: (x: number, y: number) => void;
@@ -47,8 +48,12 @@ export class Boss implements Body {
   time = 0;
   since = 0;
   cooldown = 0;
+  stompCooldown = 0;
+  shotCooldown = 0;
+  orbitCooldown = 0;
   flash = 0;
   deadTime = 0;
+  private shotWindowHits = 0;
   private cycle = 0;
   private cast = 0;
 
@@ -71,7 +76,7 @@ export class Boss implements Body {
   }
 
   expose() {
-    if (this.dead) return;
+    if (this.dead || this.mode === 'exposed') return;
     this.mode = 'exposed';
     this.since = 0;
     this.vx = 0;
@@ -83,12 +88,30 @@ export class Boss implements Body {
     return damage <= knee ? damage : Math.min(hardCap, knee + (damage - knee) * 0.35);
   }
 
-  hit(damage: number) {
-    if (!this.vulnerable || this.cooldown > 0) return 0;
-    const effective = this.capDamage(damage);
+  hit(damage: number, source: BossHitSource = 'shot') {
+    if (!this.vulnerable || this.dead) return 0;
+    let effective = 0;
+    if (source === 'stomp') {
+      if (this.stompCooldown > 0) return 0;
+      effective = this.capDamage(damage);
+      this.stompCooldown = 0.3;
+    } else if (source === 'orbit') {
+      if (this.orbitCooldown > 0) return 0;
+      effective = this.capDamage(damage);
+      this.orbitCooldown = 0.52;
+    } else {
+      if (this.shotCooldown <= 0) {
+        effective = this.capDamage(damage);
+        this.shotCooldown = 0.34;
+        this.shotWindowHits = 1;
+      } else if (this.shotWindowHits < 4) {
+        effective = this.capDamage(damage * 0.35);
+        this.shotWindowHits++;
+      } else return 0;
+    }
     this.hp = this.hp - effective <= 0.0001 ? 0 : this.hp - effective;
     this.flash = 0.23;
-    this.cooldown = 0.36;
+    this.cooldown = 0.12;
     if (!this.hp) { this.mode = 'dead'; this.vx = 0; this.vy = 0; }
     return effective;
   }
@@ -97,6 +120,10 @@ export class Boss implements Body {
     this.time += dt;
     this.since += dt;
     this.cooldown = Math.max(0, this.cooldown - dt);
+    this.stompCooldown = Math.max(0, this.stompCooldown - dt);
+    this.shotCooldown = Math.max(0, this.shotCooldown - dt);
+    this.orbitCooldown = Math.max(0, this.orbitCooldown - dt);
+    if (this.shotCooldown <= 0) this.shotWindowHits = 0;
     this.flash = Math.max(0, this.flash - dt);
     if (this.dead) { this.deadTime += dt; return; }
     if (this.mode === 'exposed') {

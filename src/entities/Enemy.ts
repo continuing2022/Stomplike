@@ -44,6 +44,7 @@ export class Enemy implements Body {
   wingLost = false;
   frozenShell = false;
   orbitCooldown = 0;
+  shellCooldown = 0;
   nextShot = 0.8;
   armor = 0;
   private homeX: number;
@@ -52,10 +53,10 @@ export class Enemy implements Body {
   constructor(public kind: EnemyKind, public x: number, public y: number, public face: number, strength = 0, world = 0, depth = 0, eliteBoost = 0) {
     this.homeX = x;
     this.homeY = y;
-    const worldHp = world === 0 ? 0 : world === 1 ? 0.45 + Math.min(2, depth) * 0.1 : 0.8 + Math.min(2, depth) * 0.1;
-    const roleHp = kind === 'guard' ? (world === 0 ? 0.75 : 0.95 + world * 0.15)
+    const worldHp = world === 0 ? 0 : world === 1 ? 0.22 + Math.min(2, depth) * 0.08 : 0.55 + Math.min(2, depth) * 0.1;
+    const roleHp = kind === 'guard' ? (world === 0 ? 0.75 : 0.9 + world * 0.15)
       : (kind === 'mage' || kind === 'miner') ? 0.25 + world * 0.1 : 0;
-    this.hp = Number(((1 + worldHp + roleHp + eliteBoost) * (1 + strength * 0.16)).toFixed(2));
+    this.hp = Number(((1 + worldHp + roleHp + eliteBoost) * (1 + strength * 0.15)).toFixed(2));
     if (kind === 'plant') { this.w = 23; this.h = 23; }
     if (kind === 'cannonball') { this.h = 18; this.vx = face * 155; }
   }
@@ -94,6 +95,7 @@ export class Enemy implements Body {
     this.stunned = Math.max(0, this.stunned - dt);
     this.chilled = Math.max(0, this.chilled - dt);
     this.orbitCooldown = Math.max(0, this.orbitCooldown - dt);
+    this.shellCooldown = Math.max(0, this.shellCooldown - dt);
     if (this.state === 'squashed') {
       if (!this.stateTime) this.state = 'gone';
       return;

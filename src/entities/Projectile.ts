@@ -94,9 +94,19 @@ export class Projectile implements Body {
     }
 
     if (this.type === 'flame') {
+      const prevX = this.x;
       this.x += this.vx * dt;
-      this.y = this.baseY + Math.sin(this.age * 15) * 22;
-      if (map.colliders(this).some(tile => !tile.oneWay && overlaps(this, tile))) this.life = 0;
+      const wallProbe = { x: this.x, y: this.baseY, w: this.w, h: Math.min(this.h, 16) };
+      if (map.colliders(wallProbe).some(tile => !tile.oneWay && overlaps(wallProbe, tile))) {
+        if (this.bounces > 0) { this.bounces--; this.x = prevX; this.vx = -this.vx; this.damage *= 1.15; this.onWall?.(this); }
+        else { this.life = 0; return; }
+      }
+      this.y = this.baseY - Math.sin(this.age * 14) * 16;
+      for (const tile of map.colliders(this)) {
+        if (tile.oneWay || !overlaps(this, tile)) continue;
+        if (tile.y >= this.baseY) this.y = Math.min(this.y, tile.y - this.h - 1);
+        else this.y = Math.max(this.y, tile.y + tile.h + 1);
+      }
     } else if (this.type === 'spread' || this.type === 'missile') {
       const prevX = this.x;
       const prevY = this.y;

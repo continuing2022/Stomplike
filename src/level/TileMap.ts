@@ -10,6 +10,7 @@ export class Tile implements Collider {
   w = TILE;
   h = TILE;
   bump = 0;
+  cooldown = 0;
   life = Infinity;
   collapse = Infinity;
   constructor(public x: number, public y: number, public kind: TileKind, public loot: Loot = 'coin') {}
@@ -84,6 +85,7 @@ export class TileMap {
   tick(dt: number, time: number) {
     for (const tile of this.tiles.values()) {
       tile.bump = Math.max(0, tile.bump - dt);
+      tile.cooldown = Math.max(0, tile.cooldown - dt);
       tile.life -= dt;
       tile.collapse -= dt;
       if (tile.life <= 0 || tile.collapse <= 0) {
@@ -119,13 +121,14 @@ export class TileMap {
       const frame = Math.floor(time * 7) % 4;
       const sprite = {
         ground: this.get(tile.x / TILE, tile.y / TILE - 1)?.kind === 'ground' ? SOIL[world] : GROUND[world], brick: BRICK[world], used: USED, pipe: PIPE, spring: SPRING, cloud: CLOUD_TILE,
-        question: QUESTION[frame], switch: QUESTION[frame], bomb: BRICK[0],
+        question: QUESTION[frame], switch: tile.cooldown > 0 ? USED : QUESTION[frame], bomb: BRICK[0],
       }[tile.kind];
       const bump = tile.bump ? Math.sin(tile.bump / 0.2 * Math.PI) * 9 : 0;
       const shake = tile.collapse < Infinity ? Math.sin(time * 75) * 2 : 0;
       if (tile.collapse < 0.25) ctx.globalAlpha = 0.5;
       renderer.draw(ctx, sprite, tile.x + shake, tile.y - bump, TILE, TILE);
       if (tile.kind === 'switch' || tile.kind === 'bomb') {
+        if (tile.kind === 'switch' && tile.cooldown > 0) ctx.globalAlpha = 0.4;
         ctx.fillStyle = tile.kind === 'switch' ? '#57e8ee' : '#ffad89';
         ctx.fillRect(tile.x + 12, tile.y + 8 - bump, 8, 16);
         ctx.fillRect(tile.x + 8, tile.y + 12 - bump, 16, 8);

@@ -279,9 +279,9 @@ export class Overlays {
 
   event(run: RunManager, leave: () => void, take: () => void, result: string) {
     const event = {
-      gambler: { title: '赌徒问号块', detail: '交出 1 颗红心，换取一件随机传说遗物。', action: '接受赌约', disabled: run.hearts < 2 },
-      fountain: { title: '黄金喷泉', detail: '在 10 秒内尽可能拾取金币。', action: '开启喷泉', disabled: false },
-      smith: { title: '炼金铁匠', detail: '支付 ' + run.price(28) + ' 金币，请铁匠打造稀有遗物（若无则补盾或淬炼）。', action: '支付铁匠', disabled: !run.canAcceptSmith() },
+      gambler: { title: '赌徒问号块', detail: '交出 1 颗红心，换取一件随机传说遗物与 35 金币。', action: '接受赌约', disabled: run.hearts < 2 },
+      fountain: { title: '黄金喷泉', detail: '在 10 秒内拾取高价值泉涌金币（计入回血进度），结束时额外获得 1 星淬炼。', action: '开启喷泉', disabled: false },
+      smith: { title: '炼金铁匠', detail: '支付 ' + run.price(28) + ' 金币，打造稀有遗物并附赠淬炼/护盾。', action: '支付铁匠', disabled: !run.canAcceptSmith() },
     }[run.event];
     this.show({
       style: 'event-view', eyebrow: '神秘问号房', title: event.title, intro: result || event.detail,
@@ -344,8 +344,13 @@ export class Overlays {
       const level = meta.talents[key];
       const { name, cost, descriptions } = TALENTS[key];
       const price: number | undefined = cost[level];
+      const detail = level === 0
+        ? '下一级：' + descriptions[0]
+        : price === undefined
+          ? '当前生效：' + descriptions[descriptions.length - 1]
+          : '当前：' + descriptions[level - 1] + '\n下一级：' + descriptions[level];
       return {
-        title: name, detail: descriptions[Math.min(level, descriptions.length - 1)], label: level + ' / ' + descriptions.length +
+        title: name, detail, label: level + ' / ' + descriptions.length +
           (price === undefined ? ' · 已满级' : ' · ' + price + ' 星币'),
         accent: '#ffc984', disabled: price === undefined || meta.stars < price, select: () => upgrade(key),
       };
@@ -359,7 +364,7 @@ export class Overlays {
   heat(meta: MetaProgression, change: (value: number) => void, back: () => void) {
     this.show({
       style: 'talent-view', eyebrow: '挑战难度', title: '星辉热度',
-      intro: '激活热度后敌人增速、生命提高，每局星币翻倍。',
+      intro: '激活热度后敌人增速、生命提高，每级热度额外提高 35% 星币结算。',
       choices: Array.from({ length: 6 }, (_, value) => ({
         title: value === 0 ? '标准模式' : '热度 ' + value,
         label: value === meta.heat ? '已选中' : undefined, accent: value ? '#ff8f8d' : '#89e4cb',

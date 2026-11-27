@@ -2,7 +2,7 @@ import { rng } from '../engine/Physics';
 import { ELITE_TRIALS, MODIFIERS, TRIAL_META, type Modifier, type TrialKind, type World } from '../level/LevelGenerator';
 import type { FlagGrade, StageResult } from '../level/Stage';
 import { CHARACTERS, type Character } from './Characters';
-import { countTags, MAX_RELICS, MAX_SHIELD, MAX_TEMPER, OVERFLOW_SMELT_BONUS, RELICS, relicOffer, SMELT_COINS, type Rarity, type Relic } from './Relics';
+import { canUnlockRelic, countTags, MAX_RELICS, MAX_SHIELD, MAX_TEMPER, OVERFLOW_SMELT_BONUS, RELICS, relicOffer, SMELT_COINS, type Rarity, type Relic } from './Relics';
 
 export type NodeType = 'stage' | 'elite' | 'shop' | 'event' | 'boss';
 export interface Node { kind: NodeType; name: string; detail: string; modifier: Modifier; trial?: TrialKind }
@@ -213,8 +213,7 @@ export class RunManager {
   canAcceptSmith() {
     if (this.coins < this.price(28)) return false;
     const counts = this.tags;
-    const hasRarePool = RELICS.some(relic => relic.rarity === 'rare' && !this.relics.includes(relic) &&
-      (!relic.requires || relic.requires.every(tag => counts[tag] >= 2)));
+    const hasRarePool = RELICS.some(relic => relic.rarity === 'rare' && !this.relics.includes(relic) && canUnlockRelic(relic, counts));
     return hasRarePool || this.shield < MAX_SHIELD || this.temper < MAX_TEMPER;
   }
 
@@ -226,7 +225,9 @@ export class RunManager {
       const chance = relicOffer(this.relics, 24, this.random, this.options.luck).find(relic => relic.rarity === 'legendary');
       if (!chance) return '';
       this.hearts--;
-      if (this.add(chance)) return `获得「${chance.name}」。`;
+      this.coins += 35;
+      this.collected += 35;
+      if (this.add(chance)) return `获得「${chance.name}」与 35 金币。`;
       this.pendingEventRelic = chance;
       return '';
     }
@@ -234,7 +235,15 @@ export class RunManager {
     if (!target && this.shield >= MAX_SHIELD && this.temper >= MAX_TEMPER) return '';
     if (!this.spend(this.price(28))) return '';
     if (target) {
-      if (this.add(target)) return `铁匠打造了「${target.name}」。`;
+      let bonus = '';
+      if (this.temper < MAX_TEMPER) {
+        this.temper++;
+        bonus = `并淬炼锋芒（★${this.temper}）`;
+      } else if (this.shield < MAX_SHIELD) {
+        this.shield++;
+        bonus = '并加固 1 点护盾';
+      }
+      if (this.add(target)) return `铁匠打造了「${target.name}」${bonus}。`;
       this.pendingEventRelic = target;
       return '';
     }
@@ -252,6 +261,6 @@ export class RunManager {
 
   summarize(won: boolean): RunSummary {
     const base = Math.max(1, this.stageStars + this.bosses * 25 + Math.floor(this.collected / 10) + this.kills + this.maxCombo * 2 + (won ? 100 : 0));
-    return { stages: this.clears, bosses: this.bosses, kills: this.kills, bestCombo: this.maxCombo, collected: this.collected, stars: base * (this.heat > 0 ? 2 : 1), won };
+    return { stages: this.clears, bosses: this.bosses, kills: this.kills, bestCombo: this.maxCombo, collected: this.collected, stars: Math.round(base * (1 + this.heat * 0.35)), won };
   }
 }

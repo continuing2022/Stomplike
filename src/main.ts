@@ -10,7 +10,7 @@ import { generateArena, generateLevel, TRIAL_META, WORLD_NAMES } from './level/L
 import { Stage } from './level/Stage';
 import { CHARACTERS } from './roguelike/Characters';
 import { MetaProgression } from './roguelike/MetaProgression';
-import { MAX_SHIELD } from './roguelike/Relics';
+import { MAX_SHIELD, MAX_TEMPER } from './roguelike/Relics';
 import { NORMAL, RunManager, type Node } from './roguelike/RunManager';
 import { drawHUD } from './ui/HUD';
 import { Overlays } from './ui/Overlays';
@@ -321,17 +321,35 @@ class Game {
 
   private fountainTake(slot: number) {
     if (this.screen !== 'fountain' || this.fountain.slot !== slot) return;
-    const value = 3;
+    const value = 12;
     this.fountain.total += value;
     this.run.coins += value;
     this.run.collected += value;
+    this.run.coinTowardsLife += value;
     this.fountain.slot = (slot + 1 + Math.floor(this.run.random() * 5)) % 6;
     this.audio.play('coin');
     this.showFountain();
   }
 
   private finishFountain() {
-    this.event('你从喷泉中拾起了 ' + this.fountain.total + ' 金币。');
+    const bonuses: string[] = [];
+    while (this.run.coinTowardsLife >= 160) {
+      this.run.coinTowardsLife -= 160;
+      if (this.run.hearts < this.run.maxHearts) {
+        this.run.hearts++;
+        bonuses.push('+1 红心');
+      } else if (this.run.shield < MAX_SHIELD) {
+        this.run.shield++;
+        bonuses.push('+1 护盾');
+      }
+    }
+    if (this.fountain.total > 0 && this.run.temper < MAX_TEMPER) {
+      this.run.temper++;
+      bonuses.push(`淬炼 ★${this.run.temper}`);
+    }
+    if (bonuses.length) this.audio.play('powerup');
+    const suffix = bonuses.length ? `（${bonuses.join(' · ')}）` : '';
+    this.event(`你从喷泉中拾起了 ${this.fountain.total} 金币${suffix}。`);
   }
 
   private rewards() {

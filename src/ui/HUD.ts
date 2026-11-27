@@ -125,7 +125,7 @@ export function drawHUD(element: HTMLElement, status: Status) {
   const healthSig = `${hearts}/${maxHearts}/${shield}/${powered ? 1 : 0}`;
   if (dom.healthSig !== healthSig) {
     dom.healthSig = healthSig;
-    dom.health.setAttribute('aria-label', `${hearts} / ${maxHearts} 心，${shield} 护盾`);
+    dom.health.setAttribute('aria-label', `${hearts} / ${maxHearts} 心，${shield} 护盾${powered ? '，红晶强化' : ''}`);
     dom.health.innerHTML =
       '<i class="heart"></i>'.repeat(Math.max(0, hearts)) +
       '<i class="heart empty"></i>'.repeat(Math.max(0, maxHearts - hearts)) +
